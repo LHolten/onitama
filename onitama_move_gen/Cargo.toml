@@ -1,0 +1,27 @@
+[package]
+name = "onitama_move_gen"
+version = "0.1.0"
+authors = ["Hytak <lhc.holten@gmail.com>"]
+edition = "2018"
+
+[lib]
+
+[profile.bench]
+debug = true
+
+[profile.release]
+debug = true
+
+[dependencies]
+bitintr = "0.3.0"
+build_const = "0.2.1"
+
+[dev-dependencies]
+criterion = "0.3.3"
+
+[build-dependencies]
+build_const = "0.2.1"
+
+[[bench]]
+name = "bench_ops"
+harness = false

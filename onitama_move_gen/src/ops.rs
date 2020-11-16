@@ -1,51 +1,23 @@
-use bitintr::{Blsi, Pdep, Popcnt, Tzcnt};
+use bitintr::{Blsr, Tzcnt};
 
 build_const!("lut");
 
 #[inline]
-pub fn shift_or(card: usize, player: usize, pieces: u32) -> u32 {
+pub fn shift_or(card: usize, player: usize, mut pieces: u32) -> u32 {
+    assert!(card < 16 && player < 2 && pieces < 1 << 25);
     let mut result = 0;
-    for to in BitIter(pieces) {
-        let pos = to.tzcnt() as usize;
-        result |= SHIFTED[card][player][pos]
-    }
-    result
-}
-
-#[inline]
-pub fn shift_or_pdep(card: usize, player: usize, pieces: u32) -> u32 {
-    let mut result = 0;
-    for i in 0..pieces.popcnt() {
-        let to = (1 << i).pdep(pieces);
-        let pos = to.tzcnt() as usize;
-        result |= SHIFTED[card][player][pos]
-    }
-    result
-}
-
-#[inline]
-pub fn shift_or_simd(card: usize, player: usize, pieces: u32) -> u32 {
-    let mut result = 0;
-    for i in 0..pieces.popcnt() {
-        let to = (1 << i).pdep(pieces);
-        let pos = to.tzcnt() as usize;
-        result |= SHIFTED[card][player][pos]
-    }
-    result
-}
-
-struct BitIter(u32);
-
-impl Iterator for BitIter {
-    type Item = u32;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.0 == 0 {
-            None
-        } else {
-            let pos = self.0.blsi();
-            self.0 ^= pos;
-            Some(pos)
+    for _ in 0..5 {
+        if pieces == 0 {
+            return result;
         }
+        let pos = pieces.tzcnt() as usize;
+        pieces = pieces.blsr();
+        result |= unsafe {
+            SHIFTED
+                .get_unchecked(card)
+                .get_unchecked(player)
+                .get_unchecked(pos)
+        };
     }
+    result
 }

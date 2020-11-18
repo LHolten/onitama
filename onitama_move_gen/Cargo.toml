@@ -9,7 +9,6 @@ edition = "2018"
 [profile.bench]
 debug = true
 lto = "thin"
-codegen-units = 1
 
 [profile.release]
 debug = true
@@ -19,6 +18,8 @@ codegen-units = 1
 [dependencies]
 bitintr = "0.3.0"
 build_const = "0.2.1"
+num-traits = "0.2.14"
+nudge = "0.2.1"
 
 [dev-dependencies]
 criterion = "0.3.3"
@@ -26,6 +27,14 @@ criterion = "0.3.3"
 [build-dependencies]
 build_const = "0.2.1"
 
+# [[bench]]
+# name = "bench_ops"
+# harness = false
+
+# [[bench]]
+# name = "bench_gen"
+# harness = false
+
 [[bench]]
-name = "bench_ops"
+name = "bench_perft"
 harness = false

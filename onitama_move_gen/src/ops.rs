@@ -1,23 +1,44 @@
-use bitintr::{Blsr, Tzcnt};
+use bitintr::{Blsi, Blsr, Tzcnt};
+use nudge::assume;
+use num_traits::Num;
 
-build_const!("lut");
+pub trait MyNum: Num + Blsr + Blsi + Copy {}
+impl<T: Num + Blsr + Blsi + Copy> MyNum for T {}
 
 #[inline]
-pub fn shift_or(card: usize, player: usize, mut pieces: u32) -> u32 {
-    assert!(card < 16 && player < 2 && pieces < 1 << 25);
-    let mut result = 0;
-    for _ in 0..5 {
-        if pieces == 0 {
-            return result;
+pub fn loop_n<T: MyNum, F: FnMut(T)>(n: usize, mut value: T, mut func: F) {
+    for i in 0..n {
+        if value.is_zero() {
+            break;
         }
-        let pos = pieces.tzcnt() as usize;
-        pieces = pieces.blsr();
-        result |= unsafe {
-            SHIFTED
-                .get_unchecked(card)
-                .get_unchecked(player)
-                .get_unchecked(pos)
-        };
+        if i != n - 1 {
+            func(value.blsi());
+            value = value.blsr();
+        } else {
+            func(value);
+        }
     }
+}
+
+#[inline]
+pub fn loop_n_exact<T: MyNum, F: FnMut(T)>(n: usize, mut value: T, mut func: F) {
+    for i in 0..n {
+        if i != n - 1 {
+            func(value.blsi());
+            value = value.blsr();
+        } else {
+            func(value);
+        }
+    }
+}
+
+#[inline]
+pub fn shift_or(card: &[u32; 25], pieces: u32) -> u32 {
+    assert!(pieces < 1 << 25);
+    let mut result = 0;
+    loop_n(5, pieces, |pieces| {
+        let pos = pieces.tzcnt() as usize;
+        result |= unsafe { card.get_unchecked(pos) };
+    });
     result
 }

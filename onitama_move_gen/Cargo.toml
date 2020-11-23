@@ -19,7 +19,7 @@ codegen-units = 1
 bitintr = "0.3.0"
 build_const = "0.2.1"
 num-traits = "0.2.14"
-nudge = "0.2.1"
+nudge = { version = "0.2.1", features = ["std", "nightly"] }
 
 [dev-dependencies]
 criterion = "0.3.3"

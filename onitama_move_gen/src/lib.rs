@@ -1,3 +1,4 @@
+#![feature(stmt_expr_attributes)]
 #[macro_use]
 extern crate build_const;
 extern crate bitintr;

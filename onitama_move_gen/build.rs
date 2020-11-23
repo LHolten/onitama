@@ -33,25 +33,18 @@ fn shift(m: u32, pos: usize) -> u32 {
     shifted & MASK[pos % 5]
 }
 
-fn reverse(card: u32) -> u32 {
-    card.reverse_bits() >> (32 - 25)
-}
-
 fn main() {
-    let mut shifted = [[[0; 25]; 16]; 2];
-    for (player, shifted) in shifted.iter_mut().enumerate() {
-        for (card, shifted) in shifted.iter_mut().enumerate() {
-            let m = CARDS[card].1;
-            let m = if player == 0 { m } else { reverse(m) };
-            for (pos, shifted) in shifted.iter_mut().enumerate() {
-                let m = shift(m, pos);
-                *shifted = m;
-            }
+    let mut shifted = [[0; 25]; 16];
+    for (card, shifted) in shifted.iter_mut().enumerate() {
+        let m = CARDS[card].1;
+        for (pos, shifted) in shifted.iter_mut().enumerate() {
+            let m = shift(m, pos);
+            *shifted = m;
         }
     }
 
     let consts = ConstWriter::for_build("lut").unwrap();
     let mut consts = consts.finish_dependencies();
-    consts.add_value("SHIFTED", "[[[u32; 25]; 16]; 2]", shifted);
+    consts.add_value("SHIFTED", "[[u32; 25]; 16]", shifted);
     consts.finish();
 }

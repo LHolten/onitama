@@ -2,37 +2,46 @@ use std::mem::MaybeUninit;
 
 use nudge::assume;
 
-use crate::gen::Game;
+use crate::gen::{Game, Move, Player};
 
-pub fn perft(game: u64, depth: usize, mut total: &mut u64) {
-    let game = Game::deflate(game);
+pub fn perft(game: Game, depth: usize, mut total: &mut u64) {
     if depth == 0 {
         *total += 1;
         return;
     }
-    let mut new_games: [MaybeUninit<u64>; 40] = unsafe { MaybeUninit::uninit().assume_init() };
+    let mut moves: [MaybeUninit<Move>; 40] = unsafe { MaybeUninit::uninit().assume_init() };
 
     let mut length = 0;
     game.iter(|m| {
         unsafe { assume(length < 40) }
-        new_games[length] = MaybeUninit::new(game.step(m).compress());
+        moves[length] = MaybeUninit::new(m);
         length += 1;
     });
 
     unsafe { assume(length < 41) }
-    for new_game in &new_games[0..length] {
-        perft(unsafe { new_game.assume_init() }, depth - 1, &mut total);
+    for m in &moves[0..length] {
+        let m = unsafe { m.assume_init() };
+        // println!("{:#027b}", unsafe { new_game.assume_init() }.other.pieces);
+        perft(game.step(m), depth - 1, &mut total);
     }
 }
 
 pub fn perft_test(depth: usize) -> u64 {
     const TEST_GAME: Game = Game {
-        my: 0b0011_010_00000_00000_00000_00000_11111,
-        other: 0b1100_010_00000_00000_00000_00000_11111,
+        my: Player {
+            pieces: 0b11011,
+            king: 0b00100,
+            cards: 0b0011,
+        },
+        other: Player {
+            pieces: 0b11011,
+            king: 0b00100,
+            cards: 0b1100,
+        },
     };
 
     let mut total = 0;
-    perft(TEST_GAME.compress(), depth, &mut total);
+    perft(TEST_GAME, depth, &mut total);
     total
 }
 

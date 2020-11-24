@@ -1,115 +1,92 @@
-use bitintr::{Pdep, Popcnt, Tzcnt};
+use bitintr::Tzcnt;
 
 use crate::ops::{loop_bits, loop_bits_exact};
 use crate::SHIFTED;
 
-const CARD_MASK: u32 = 0b1111 << 28;
-const KING_MASK: u32 = 0b111 << 25;
-const PIECES_MASK: u32 = (1 << 25) - 1;
-const FIRST_MASK: u64 = u32::MAX as u64;
+#[derive(Copy, Clone)]
+pub struct Player {
+    pub pieces: u32,
+    pub king: u32,
+    pub cards: u8,
+}
 
 #[derive(Copy, Clone)]
 pub struct Game {
-    pub my: u32,
-    pub other: u32,
+    pub my: Player,
+    pub other: Player,
 }
 
+#[derive(Copy, Clone)]
 pub struct Move {
-    from: u32,
-    to: u32,
-    to_inv: u32,
-    card: u32,
+    from: u8, // sparse
+    to: u8,   // sparse
+    card: u8,
     king: bool,
 }
 
 impl Game {
-    pub fn compress(self) -> u64 {
-        self.my as u64 | (self.other as u64) << 32
-    }
-
-    pub fn deflate(val: u64) -> Self {
-        Game {
-            my: (val & FIRST_MASK) as u32,
-            other: ((val & !FIRST_MASK) >> 32) as u32,
-        }
-    }
-
     pub fn step(self, m: Move) -> Self {
-        let cards = m.card ^ !self.other & CARD_MASK;
-        let other = self.other & !m.to_inv;
+        let my_cards = m.card ^ !self.other.cards;
+        let other_pieces = self.other.pieces & !(1 << (24 - m.to));
 
-        let my = if m.king {
-            let pieces = self.my ^ m.from;
-            let king_pos = ((m.to - 1) & pieces).popcnt() << 25;
-            cards ^ m.to ^ king_pos ^ pieces & PIECES_MASK
+        let mut my_pieces = self.my.pieces;
+        let mut my_king = self.my.king;
+        if m.king {
+            my_king = 1 << m.to;
         } else {
-            cards ^ m.from ^ m.to ^ self.my & !CARD_MASK
+            my_pieces ^= (1 << m.from) ^ (1 << m.to)
         };
 
         Game {
-            my: other,
-            other: my,
+            my: Player {
+                pieces: other_pieces,
+                king: self.other.king,
+                cards: self.other.cards,
+            },
+            other: Player {
+                pieces: my_pieces,
+                king: my_king,
+                cards: my_cards,
+            },
         }
     }
 
     pub fn iter<F: FnMut(Move)>(self, mut func: F) {
-        let mut any_moves = false;
         let mut handle_cards = #[inline(always)]
         |from: u32, king: bool| {
             loop_bits_exact(
                 2,
-                self.my & CARD_MASK,
+                self.my.cards,
                 #[inline(always)]
                 |card| {
                     let &shifted = unsafe {
                         SHIFTED
-                            .get_unchecked(card.tzcnt() as usize - 28)
+                            .get_unchecked(card.tzcnt() as usize)
                             .get_unchecked(from.tzcnt() as usize)
                     };
-                    let shifted = shifted & !self.my;
+                    let shifted = shifted & !(self.my.pieces | self.my.king);
                     loop_bits(
                         shifted,
                         #[inline(always)]
                         |to| {
-                            let to_inv = (1 << 24) >> to.tzcnt();
                             func(Move {
-                                from,
-                                to,
-                                to_inv,
+                                from: from.tzcnt() as u8,
+                                to: to.tzcnt() as u8,
                                 card,
                                 king,
-                            });
-                            any_moves = true;
+                            })
                         },
                     );
                 },
             );
         };
 
-        let my_king = (1 << ((self.my & KING_MASK) >> 25)).pdep(self.my);
-        handle_cards(my_king, true);
+        handle_cards(self.my.king, true);
         loop_bits(
-            (self.my ^ my_king) & PIECES_MASK,
+            self.my.pieces,
             #[inline(always)]
             |from| handle_cards(from, false),
         );
-
-        if !any_moves {
-            loop_bits_exact(
-                2,
-                self.my & CARD_MASK,
-                #[inline(always)]
-                |card| {
-                    func(Move {
-                        from: 0,
-                        to: 0,
-                        to_inv: 0,
-                        card,
-                        king: true,
-                    })
-                },
-            );
-        }
     }
 }
 

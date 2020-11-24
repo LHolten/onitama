@@ -13,7 +13,7 @@ pub fn loop_bits<F: FnMut(u32)>(mut value: u32, mut func: F) {
 }
 
 #[inline(always)]
-pub fn loop_bits_exact<F: FnMut(u32)>(n: usize, mut value: u32, mut func: F) {
+pub fn loop_bits_exact<F: FnMut(u8)>(n: usize, mut value: u8, mut func: F) {
     for i in 0..n {
         if i != n - 1 {
             unsafe { assume(value.blsi() == 1 << value.tzcnt()) }

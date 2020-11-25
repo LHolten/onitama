@@ -2,36 +2,27 @@ use bitintr::{Blsi, Blsr, Tzcnt};
 use nudge::assume;
 
 #[inline(always)]
-pub fn loop_bits<F: FnMut(u32)>(mut value: u32, mut func: F) {
+pub fn loop_moves<F: FnMut(u32)>(mut value: u32, mut func: F) {
     while value != 0 {
         unsafe { assume(value.blsi() == 1 << value.tzcnt()) }
-        unsafe { assume(value.blsr() == value ^ value.blsi()) }
-        unsafe { assume(value.tzcnt() == value.blsi().tzcnt()) }
-        func(value.blsi());
+        func(value.tzcnt());
         value = value.blsr();
     }
 }
 
 #[inline(always)]
-pub fn loop_bits_exact<F: FnMut(u8)>(n: usize, mut value: u8, mut func: F) {
-    for i in 0..n {
-        if i != n - 1 {
-            unsafe { assume(value.blsi() == 1 << value.tzcnt()) }
-            unsafe { assume(value.blsr() == value ^ value.blsi()) }
-            unsafe { assume(value.tzcnt() == value.blsi().tzcnt()) }
-            func(value.blsi());
-            value = value.blsr();
-        } else {
-            func(value);
-        }
-    }
+pub fn loop_cards<F: FnMut(u32)>(mut value: u32, mut func: F) {
+    unsafe { assume(value.blsi() == 1u32.wrapping_shl(value.tzcnt())) }
+    func(value.tzcnt());
+    value = value.blsr();
+    func(value.tzcnt());
 }
 
 #[inline]
 pub fn shift_or(card: &[u32; 25], pieces: u32) -> u32 {
     assert!(pieces < 1 << 25);
     let mut result = 0;
-    loop_bits(pieces, |pieces| {
+    loop_moves(pieces, |pieces| {
         let pos = pieces.tzcnt() as usize;
         result |= unsafe { card.get_unchecked(pos) };
     });

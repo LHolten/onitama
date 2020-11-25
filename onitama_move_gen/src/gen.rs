@@ -1,7 +1,4 @@
-use std::mem::MaybeUninit;
-
-use bitintr::{Bzhi, Pdep, Popcnt, Tzcnt};
-use nudge::assume;
+use bitintr::Popcnt;
 
 use crate::ops::{loop_cards, loop_moves};
 use crate::SHIFTED;
@@ -84,5 +81,28 @@ impl Game {
             #[inline(always)]
             |from| handle_cards(from, false),
         );
+    }
+
+    pub fn count_moves(&self) -> u64 {
+        let mut total = 0;
+        loop_moves(
+            self.my & PIECE_MASK,
+            #[inline(always)]
+            |from: u32| {
+                loop_cards(
+                    self.my_cards,
+                    #[inline(always)]
+                    |card| {
+                        let &shifted = unsafe {
+                            SHIFTED
+                                .get_unchecked(card as usize)
+                                .get_unchecked(from as usize)
+                        };
+                        total += (shifted & !self.my).popcnt() as u64
+                    },
+                )
+            },
+        );
+        total
     }
 }

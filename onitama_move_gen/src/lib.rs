@@ -1,4 +1,6 @@
 #![feature(stmt_expr_attributes)]
+#![feature(maybe_uninit_ref)]
+#![feature(maybe_uninit_extra)]
 #[macro_use]
 extern crate build_const;
 extern crate bitintr;

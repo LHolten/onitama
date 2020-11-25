@@ -1,22 +1,23 @@
+use std::mem::MaybeUninit;
+
 use bitintr::Tzcnt;
+use nudge::assume;
 
 use crate::ops::{loop_bits, loop_bits_exact};
 use crate::SHIFTED;
 
-#[derive(Copy, Clone)]
 pub struct Player {
     pub pieces: u32,
     pub king: u32,
     pub cards: u8,
 }
 
-#[derive(Copy, Clone)]
 pub struct Game {
     pub my: Player,
     pub other: Player,
+    pub depth: u8,
 }
 
-#[derive(Copy, Clone)]
 pub struct Move {
     from: u8, // sparse
     to: u8,   // sparse
@@ -25,7 +26,7 @@ pub struct Move {
 }
 
 impl Game {
-    pub fn step(self, m: Move) -> Self {
+    pub fn step(&self, m: Move) -> Self {
         let my_cards = m.card ^ !self.other.cards;
         let other_pieces = self.other.pieces & !(1 << (24 - m.to));
 
@@ -48,10 +49,12 @@ impl Game {
                 king: my_king,
                 cards: my_cards,
             },
+            depth: self.depth + 1,
         }
     }
 
-    pub fn iter<F: FnMut(Move)>(self, mut func: F) {
+    #[inline(always)]
+    pub fn new_games(&self, stack: &mut [MaybeUninit<Game>], height: &mut usize) {
         let mut handle_cards = #[inline(always)]
         |from: u32, king: bool| {
             loop_bits_exact(
@@ -69,12 +72,15 @@ impl Game {
                         shifted,
                         #[inline(always)]
                         |to| {
-                            func(Move {
+                            let m = Move {
                                 from: from.tzcnt() as u8,
                                 to: to.tzcnt() as u8,
                                 card,
                                 king,
-                            })
+                            };
+                            unsafe { assume(*height < stack.len()) }
+                            stack[*height] = MaybeUninit::new(self.step(m));
+                            *height += 1;
                         },
                     );
                 },

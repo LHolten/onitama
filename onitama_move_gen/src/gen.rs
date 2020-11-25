@@ -6,58 +6,55 @@ use nudge::assume;
 use crate::ops::{loop_cards, loop_moves};
 use crate::SHIFTED;
 
-const KING_MASK: u32 = 0b111 << 25;
 const PIECE_MASK: u32 = (1 << 25) - 1;
-const CARD_MASK: u32 = 0b1111 << 28;
 
 pub struct Game {
     pub my: u32,
     pub other: u32,
+    pub my_cards: u8,
+    pub other_cards: u8,
     pub depth: u8,
 }
 
 pub struct Move {
     from: u32, // sparse
     to: u32,   // sparse
-    card: u32, // sparse
+    card: u8,  // sparse
     king: bool,
 }
 
 impl Game {
-    pub fn step(&self, m: Move, other_king: u32) -> Self {
-        let my_cards = 1u32.wrapping_shl(m.card) ^ !self.other;
-        let mut other = self.other;
-        if self.other & (1 << 24) >> m.to != 0 {
-            other ^= (1 << 24) >> m.to;
-            other = (other & (other_king - 1)).popcnt() << 25 | other & !KING_MASK;
-        }
+    pub fn step(&self, m: Move) -> Self {
+        let to_other = (1 << 24) >> m.to;
+        let other = self.other & !to_other;
 
-        let my_pieces = self.my ^ (1 << m.from) ^ (1 << m.to);
-        let mut my_king = my_pieces;
+        let my_cards = 1 << m.card ^ !self.other_cards;
+        let mut my = self.my ^ (1 << m.from) ^ (1 << m.to);
+
         if m.king {
-            my_king = my_pieces.bzhi(m.from).popcnt() << 25;
+            my = my & PIECE_MASK | m.to << 25;
         };
 
         Game {
-            other: my_king & KING_MASK | my_pieces & PIECE_MASK | my_cards & CARD_MASK,
+            other: my,
             my: other,
+            other_cards: my_cards,
+            my_cards: self.other_cards,
             depth: self.depth + 1,
         }
     }
 
     #[inline(always)]
     pub fn new_games<F: FnMut(Game, bool)>(&self, mut func: F) {
-        let other_king = (1 << ((self.other & KING_MASK) >> 25)).pdep(self.other);
-
         let mut handle_cards = #[inline(always)]
         |from: u32, king: bool| {
             loop_cards(
-                self.my & CARD_MASK,
+                self.my_cards,
                 #[inline(always)]
                 |card| {
                     let &shifted = unsafe {
                         SHIFTED
-                            .get_unchecked(card as usize - 28)
+                            .get_unchecked(card as usize)
                             .get_unchecked(from as usize)
                     };
                     loop_moves(
@@ -70,22 +67,20 @@ impl Game {
                                 card,
                                 king,
                             };
-                            let mut win = other_king == (1 << 24) >> to;
+                            let mut win = self.other.wrapping_shr(25) == 24 - to;
                             if king {
                                 win |= to == 22
                             }
-                            func(self.step(m, other_king), win)
+                            func(self.step(m), win)
                         },
                     )
                 },
             )
         };
 
-        let my_king = (1 << ((self.my & KING_MASK) >> 25)).pdep(self.my);
-        unsafe { assume(my_king == 1 << my_king.tzcnt()) }
-        handle_cards(my_king.tzcnt(), true);
+        handle_cards(self.my.wrapping_shr(25), true);
         loop_moves(
-            self.my & PIECE_MASK ^ my_king,
+            self.my & PIECE_MASK ^ 1 << self.my.wrapping_shr(25),
             #[inline(always)]
             |from| handle_cards(from, false),
         );

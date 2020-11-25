@@ -11,8 +11,8 @@ pub fn loop_moves<F: FnMut(u32)>(mut value: u32, mut func: F) {
 }
 
 #[inline(always)]
-pub fn loop_cards<F: FnMut(u32)>(mut value: u32, mut func: F) {
-    unsafe { assume(value.blsi() == 1u32.wrapping_shl(value.tzcnt())) }
+pub fn loop_cards<F: FnMut(u8)>(mut value: u8, mut func: F) {
+    unsafe { assume(value.blsi() == 1 << value.tzcnt()) }
     func(value.tzcnt());
     value = value.blsr();
     func(value.tzcnt());

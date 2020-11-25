@@ -32,8 +32,10 @@ pub fn perft(game: Game, max_depth: u8) -> u64 {
 
 pub fn perft_test(depth: u8) -> u64 {
     const TEST_GAME: Game = Game {
-        my: 0b11111 + (2 << 25) + (0b0011 << 28),
-        other: 0b11111 + (2 << 25) + (0b1100 << 28),
+        my: 0b11111 + (2 << 25),
+        my_cards: 0b0011,
+        other: 0b11111 + (2 << 25),
+        other_cards: 0b1100,
         depth: 0,
     };
 
@@ -53,6 +55,6 @@ mod tests {
         assert_eq!(perft_test(3), 1989);
         assert_eq!(perft_test(4), 28509);
         assert_eq!(perft_test(5), 487780);
-        // assert_eq!(perft_test(6), 7748422);
+        assert_eq!(perft_test(6), 7748422);
     }
 }

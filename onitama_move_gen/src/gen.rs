@@ -10,7 +10,6 @@ pub struct Game {
     pub other: u32,
     pub my_cards: u8,
     pub other_cards: u8,
-    pub depth: u8,
 }
 
 pub struct Move {
@@ -37,7 +36,6 @@ impl Game {
             my: other,
             other_cards: my_cards,
             my_cards: self.other_cards,
-            depth: self.depth + 1,
         }
     }
 

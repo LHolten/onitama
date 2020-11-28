@@ -1,6 +1,6 @@
 use bitintr::Popcnt;
 
-use crate::ops::{loop_cards, loop_moves};
+use crate::ops::{card_array, BitIter};
 use crate::SHIFTED;
 
 const PIECE_MASK: u32 = (1 << 25) - 1;
@@ -43,64 +43,65 @@ impl Game {
     pub fn new_games<F: FnMut(Game, bool)>(&self, mut func: F) {
         let mut handle_cards = #[inline(always)]
         |from: u32, king: bool| {
-            loop_cards(
-                self.my_cards,
-                #[inline(always)]
-                |card| {
-                    let &shifted = unsafe {
-                        SHIFTED
-                            .get_unchecked(card as usize)
-                            .get_unchecked(from as usize)
+            for &card in &card_array(self.my_cards) {
+                let &shifted = unsafe {
+                    SHIFTED
+                        .get_unchecked(card as usize)
+                        .get_unchecked(from as usize)
+                };
+                for to in BitIter(shifted & !self.my) {
+                    let m = Move {
+                        from,
+                        to,
+                        card,
+                        king,
                     };
-                    loop_moves(
-                        shifted & !self.my,
-                        #[inline(always)]
-                        |to| {
-                            let m = Move {
-                                from,
-                                to,
-                                card,
-                                king,
-                            };
-                            let mut win = self.other.wrapping_shr(25) == 24 - to;
-                            if king {
-                                win |= to == 22
-                            }
-                            func(self.step(m), win)
-                        },
-                    )
-                },
-            )
+                    let mut win = self.other.wrapping_shr(25) == 24 - to;
+                    if king {
+                        win |= to == 22
+                    }
+                    func(self.step(m), win)
+                }
+            }
         };
 
         handle_cards(self.my.wrapping_shr(25), true);
-        loop_moves(
-            self.my & PIECE_MASK ^ 1 << self.my.wrapping_shr(25),
-            #[inline(always)]
-            |from| handle_cards(from, false),
-        );
+        for from in BitIter(self.my & PIECE_MASK ^ 1 << self.my.wrapping_shr(25)) {
+            handle_cards(from, false)
+        }
     }
 
     pub fn count_moves(&self) -> u64 {
         let mut total = 0;
-        loop_moves(
-            self.my & PIECE_MASK,
-            #[inline(always)]
-            |from: u32| {
-                loop_cards(
-                    self.my_cards,
-                    #[inline(always)]
-                    |card| {
-                        let &shifted = unsafe {
-                            SHIFTED
-                                .get_unchecked(card as usize)
-                                .get_unchecked(from as usize)
-                        };
-                        total += (shifted & !self.my).popcnt() as u64
-                    },
-                )
-            },
-        );
+        for from in BitIter(self.my & PIECE_MASK) {
+            for &card in &card_array(self.my_cards) {
+                let &shifted = unsafe {
+                    SHIFTED
+                        .get_unchecked(card as usize)
+                        .get_unchecked(from as usize)
+                };
+                total += (shifted & !self.my).popcnt() as u64
+            }
+        }
         total
     }
+
+    // pub fn reach(&self) -> u32 {
+    //     let mut result = 0;
+    //     loop_moves(self.my & PIECE_MASK, |from| {
+    //         loop_cards(self.my_cards, |card| {
+    //             result |= unsafe {
+    //                 SHIFTED
+    //                     .get_unchecked(card as usize)
+    //                     .get_unchecked(from as usize)
+    //             };
+    //         })
+    //     });
+    //     result
+    // }
+
+    // pub fn is_win(&self) -> bool {
+    //     let reach = self.reach();
+    //     let other_king = (1 << 24) >> self.other.wrapping_shr(25);
+    // }
 }

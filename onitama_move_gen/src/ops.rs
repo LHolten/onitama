@@ -18,13 +18,17 @@ impl Iterator for BitIter {
     }
 }
 
-pub fn card_array(mut value: u8) -> [u8; 2] {
+pub fn card_iter(mut value: u8) -> impl Iterator<Item = u8> {
     unsafe { assume(value.blsi() == 1 << value.tzcnt()) }
     let card1 = value.tzcnt();
     value = value.blsr();
     unsafe { assume(value.blsi() == 1 << value.tzcnt()) }
     let card2 = value.tzcnt();
-    [card1, card2]
+    (0..2).map(move |i| match i {
+        0 => card1,
+        1 => card2,
+        _ => unreachable!(),
+    })
 }
 
 // #[inline]

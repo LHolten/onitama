@@ -1,6 +1,8 @@
+use std::slice::Iter;
+
 use bitintr::Popcnt;
 
-use crate::ops::{card_array, BitIter};
+use crate::ops::{card_iter, BitIter};
 use crate::SHIFTED;
 
 const PIECE_MASK: u32 = (1 << 25) - 1;
@@ -39,42 +41,81 @@ impl Game {
         }
     }
 
-    #[inline(always)]
-    pub fn new_games<F: FnMut(Game, bool)>(&self, mut func: F) {
-        let mut handle_cards = #[inline(always)]
-        |from: u32, king: bool| {
-            for &card in &card_array(self.my_cards) {
-                let &shifted = unsafe {
-                    SHIFTED
-                        .get_unchecked(card as usize)
-                        .get_unchecked(from as usize)
-                };
-                for to in BitIter(shifted & !self.my) {
-                    let m = Move {
-                        from,
-                        to,
-                        card,
-                        king,
+    pub fn new_games(&self) -> impl Iterator<Item = (Game, bool)> + '_ {
+        let handle_piece = #[inline(always)]
+        move |from: u32, king: bool| {
+            card_iter(self.my_cards).flat_map(
+                #[inline(always)]
+                move |card| {
+                    let &shifted = unsafe {
+                        SHIFTED
+                            .get_unchecked(card as usize)
+                            .get_unchecked(from as usize)
                     };
-                    let mut win = self.other.wrapping_shr(25) == 24 - to;
-                    if king {
-                        win |= to == 22
-                    }
-                    func(self.step(m), win)
-                }
-            }
+                    BitIter(shifted & !self.my).map(
+                        #[inline(always)]
+                        move |to| {
+                            let m = Move {
+                                from,
+                                to,
+                                card,
+                                king,
+                            };
+                            let mut win = self.other.wrapping_shr(25) == 24 - to;
+                            if king {
+                                win |= to == 22
+                            }
+                            (self.step(m), win)
+                        },
+                    )
+                },
+            )
         };
 
-        handle_cards(self.my.wrapping_shr(25), true);
-        for from in BitIter(self.my & PIECE_MASK ^ 1 << self.my.wrapping_shr(25)) {
-            handle_cards(from, false)
-        }
+        handle_piece(self.my.wrapping_shr(25), true).chain(
+            BitIter(self.my & PIECE_MASK ^ 1 << self.my.wrapping_shr(25)).flat_map(
+                #[inline(always)]
+                move |from| handle_piece(from, false),
+            ),
+        )
     }
+
+    // #[inline(always)]
+    // pub fn new_games<F: FnMut(Game, bool)>(&self, mut func: F) {
+    //     let mut handle_cards = #[inline(always)]
+    //     |from: u32, king: bool| {
+    //         for card in card_iter(self.my_cards) {
+    //             let &shifted = unsafe {
+    //                 SHIFTED
+    //                     .get_unchecked(card as usize)
+    //                     .get_unchecked(from as usize)
+    //             };
+    //             for to in BitIter(shifted & !self.my) {
+    //                 let m = Move {
+    //                     from,
+    //                     to,
+    //                     card,
+    //                     king,
+    //                 };
+    //                 let mut win = self.other.wrapping_shr(25) == 24 - to;
+    //                 if king {
+    //                     win |= to == 22
+    //                 }
+    //                 func(self.step(m), win)
+    //             }
+    //         }
+    //     };
+
+    //     handle_cards(self.my.wrapping_shr(25), true);
+    //     for from in BitIter(self.my & PIECE_MASK ^ 1 << self.my.wrapping_shr(25)) {
+    //         handle_cards(from, false)
+    //     }
+    // }
 
     pub fn count_moves(&self) -> u64 {
         let mut total = 0;
         for from in BitIter(self.my & PIECE_MASK) {
-            for &card in &card_array(self.my_cards) {
+            for card in card_iter(self.my_cards) {
                 let &shifted = unsafe {
                     SHIFTED
                         .get_unchecked(card as usize)
@@ -86,22 +127,12 @@ impl Game {
         total
     }
 
-    // pub fn reach(&self) -> u32 {
-    //     let mut result = 0;
-    //     loop_moves(self.my & PIECE_MASK, |from| {
-    //         loop_cards(self.my_cards, |card| {
-    //             result |= unsafe {
-    //                 SHIFTED
-    //                     .get_unchecked(card as usize)
-    //                     .get_unchecked(from as usize)
-    //             };
-    //         })
-    //     });
-    //     result
-    // }
-
-    // pub fn is_win(&self) -> bool {
-    //     let reach = self.reach();
-    //     let other_king = (1 << 24) >> self.other.wrapping_shr(25);
-    // }
+    pub fn is_win(&self) -> bool {
+        for (_, win) in self.new_games() {
+            if win {
+                return true;
+            }
+        }
+        false
+    }
 }

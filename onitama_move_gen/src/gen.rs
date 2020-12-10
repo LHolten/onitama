@@ -82,11 +82,11 @@ impl Game {
 
 pub struct GameIter<'a> {
     game: &'a Game,
-    from: Option<BitIter>,
+    from: BitIter,
     from_curr: u32,
-    card: Option<CardIter>,
+    card: CardIter,
     card_curr: u8,
-    to: Option<BitIter>,
+    to: BitIter,
 }
 
 impl Iterator for GameIter<'_> {
@@ -94,37 +94,20 @@ impl Iterator for GameIter<'_> {
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        let mut to_curr = 0;
-
-        if let Some(to) = &mut self.to {
-            match to.next() {
-                Some(val) => to_curr = val,
-                None => self.to = None,
-            }
-        }
-        while self.to.is_none() {
-            if let Some(card) = &mut self.card {
-                match card.next() {
-                    Some(val) => self.card_curr = val,
-                    None => self.card = None,
+        let mut to_curr = self.to.next();
+        while to_curr.is_none() {
+            match self.card.next() {
+                Some(val) => self.card_curr = val,
+                None => {
+                    self.from_curr = self.from.next()?;
+                    self.card = self.game.next_card();
+                    self.card_curr = self.card.next().unwrap();
                 }
             }
-            if self.card.is_none() {
-                if let Some(from) = &mut self.from {
-                    self.from_curr = from.next()?
-                } else {
-                    self.from = Some(self.game.next_from());
-                    self.from_curr = self.from.as_mut().unwrap().next().unwrap()
-                }
-                self.card = Some(self.game.next_card());
-                self.card_curr = self.card.as_mut().unwrap().next().unwrap();
-            }
-            self.to = Some(self.game.next_to(self.from_curr, self.card_curr));
-            match self.to.as_mut().unwrap().next() {
-                Some(val) => to_curr = val,
-                None => self.to = None,
-            }
+            self.to = self.game.next_to(self.from_curr, self.card_curr);
+            to_curr = self.to.next();
         }
+        let to_curr = to_curr.unwrap();
 
         let my_king = self.game.my.wrapping_shr(25);
         let other_king = 24 - self.game.other.wrapping_shr(25);
@@ -149,13 +132,18 @@ impl<'a> IntoIterator for &'a Game {
     type IntoIter = GameIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
+        let mut from = self.next_from();
+        let from_curr = from.next().unwrap();
+        let mut card = self.next_card();
+        let card_curr = card.next().unwrap();
+        let to = self.next_to(from_curr, card_curr);
         GameIter {
             game: self,
-            from: None,
-            from_curr: 0,
-            card: None,
-            card_curr: 0,
-            to: None,
+            from,
+            from_curr,
+            card,
+            card_curr,
+            to,
         }
     }
 }

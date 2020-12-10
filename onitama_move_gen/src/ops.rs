@@ -9,26 +9,39 @@ impl Iterator for BitIter {
     fn next(&mut self) -> Option<Self::Item> {
         if self.0 != 0 {
             unsafe { assume(self.0.blsi() == 1 << self.0.tzcnt()) }
-            let res = self.0.tzcnt();
+            let val = self.0.tzcnt();
             self.0 = self.0.blsr();
-            Some(res)
+            Some(val)
         } else {
             None
         }
     }
 }
 
-pub fn card_iter(mut value: u8) -> impl Iterator<Item = u8> {
-    unsafe { assume(value.blsi() == 1 << value.tzcnt()) }
-    let card1 = value.tzcnt();
-    value = value.blsr();
-    unsafe { assume(value.blsi() == 1 << value.tzcnt()) }
-    let card2 = value.tzcnt();
-    (0..2).map(move |i| match i {
-        0 => card1,
-        1 => card2,
-        _ => unreachable!(),
-    })
+pub struct CardIter {
+    card1: Option<u8>,
+    card2: Option<u8>,
+}
+
+impl CardIter {
+    pub fn new(mut value: u8) -> Self {
+        let card1 = Some(value.tzcnt());
+        unsafe { assume(value != 0) }
+        value = value.blsr();
+        let card2 = Some(value.tzcnt());
+        Self { card1, card2 }
+    }
+}
+
+impl Iterator for CardIter {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let val = self.card1;
+        self.card1 = self.card2;
+        self.card2 = None;
+        val
+    }
 }
 
 // #[inline]

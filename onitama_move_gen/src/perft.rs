@@ -1,14 +1,23 @@
 use crate::gen::Game;
 
+#[inline(never)]
 fn perft(game: Game, depth: u8) -> u64 {
     let mut total = 0;
-    for (new_game, win) in game.new_games() {
-        if win {
-            total += 1;
-        } else if depth == 2 {
-            total += new_game.count_moves()
-        } else {
-            total += perft(new_game, depth - 1)
+    if depth == 2 {
+        for (new_game, win) in &game {
+            if win {
+                total += 1;
+            } else {
+                total += new_game.count_moves()
+            }
+        }
+    } else {
+        for (new_game, win) in &game {
+            if win {
+                total += 1;
+            } else {
+                total += perft(new_game, depth - 1)
+            }
         }
     }
     total

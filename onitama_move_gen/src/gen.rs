@@ -1,8 +1,8 @@
-use bitintr::Popcnt;
+use bitintr::{Andn, Popcnt};
 use nudge::assume;
 
 use crate::ops::{BitIter, CardIter};
-use crate::SHIFTED;
+use crate::{SHIFTED, SHIFTED_L, SHIFTED_U};
 
 const PIECE_MASK: u32 = (1 << 25) - 1;
 
@@ -43,15 +43,18 @@ impl Game {
     #[inline(always)]
     pub fn count_moves(&self) -> u64 {
         let mut total = 0;
-        for from in BitIter(self.my & PIECE_MASK) {
-            for card in CardIter::new(self.my_cards) {
-                let &shifted = unsafe {
-                    SHIFTED
-                        .get_unchecked(card as usize)
+        for from in self.next_from() {
+            let both = unsafe {
+                let mut cards = self.next_card();
+                SHIFTED_L
+                    .get_unchecked(cards.next().unwrap() as usize)
+                    .get_unchecked(from as usize)
+                    | SHIFTED_U
+                        .get_unchecked(cards.next().unwrap() as usize)
                         .get_unchecked(from as usize)
-                };
-                total += (shifted & !self.my).popcnt() as u64
-            }
+            };
+            let my = self.my as u64 | (self.my as u64) << 32;
+            total += my.andn(both).popcnt();
         }
         total
     }
@@ -67,9 +70,11 @@ impl Game {
         unsafe { assume(self.my & PIECE_MASK != 0) }
         BitIter(self.my & PIECE_MASK)
     }
+
     fn next_card(&self) -> CardIter {
         CardIter::new(self.my_cards)
     }
+
     fn next_to(&self, from: u32, card: u8) -> BitIter {
         let &shifted = unsafe {
             SHIFTED

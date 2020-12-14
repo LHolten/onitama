@@ -7,9 +7,9 @@ fn perft(game: Game, depth: u8) -> u64 {
         if win {
             total += 1;
         } else if depth == 2 {
-            total += new_game.count_moves()
+            total += new_game.count_moves();
         } else {
-            total += perft(new_game, depth - 1)
+            total += perft(new_game, depth - 1);
         }
     }
     total

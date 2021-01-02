@@ -35,13 +35,17 @@ fn shift(m: u32, pos: usize) -> u32 {
 
 fn main() {
     let mut shifted = [[0; 25]; 16];
+    let mut shifted_r = [[0; 25]; 16];
     let mut shifted_l = [[0; 25]; 16];
     let mut shifted_u = [[0; 25]; 16];
-    for (card, shifted) in shifted.iter_mut().enumerate() {
+    for card in 0..16 {
         let m = CARDS[card].1;
-        for (pos, shifted) in shifted.iter_mut().enumerate() {
+        let r = CARDS[card].1.reverse_bits();
+        for pos in 0..25 {
             let m = shift(m, pos);
-            *shifted = m;
+            let r = shift(r, pos);
+            shifted[card][pos] = m;
+            shifted_r[card][pos] = r;
             shifted_l[card][pos] = m as u64;
             shifted_u[card][pos] = (m as u64) << 32;
         }
@@ -50,6 +54,7 @@ fn main() {
     let consts = ConstWriter::for_build("lut").unwrap();
     let mut consts = consts.finish_dependencies();
     consts.add_value("SHIFTED", "[[u32; 25]; 16]", shifted);
+    consts.add_value("SHIFTED_R", "[[u32; 25]; 16]", shifted_r);
     consts.add_value("SHIFTED_L", "[[u64; 25]; 16]", shifted_l);
     consts.add_value("SHIFTED_U", "[[u64; 25]; 16]", shifted_u);
     consts.finish();

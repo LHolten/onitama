@@ -3,7 +3,7 @@ use crate::gen::Game;
 #[inline(never)]
 fn perft(game: Game, depth: u8) -> u64 {
     let mut total = 0;
-    for (new_game, win) in &game {
+    for (new_game, win) in game.forward() {
         if win {
             total += 1;
         } else if depth == 2 {

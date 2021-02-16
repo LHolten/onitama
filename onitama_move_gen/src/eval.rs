@@ -1,4 +1,7 @@
-use std::{cmp::Ordering, fmt::Display};
+use std::{
+    cmp::Ordering,
+    fmt::{Debug, Display},
+};
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Eval(i8);
@@ -10,6 +13,12 @@ impl Display for Eval {
             Ordering::Less => write!(f, "Loss: {}", self.0 - i8::MIN),
             Ordering::Equal => write!(f, "Tie"),
         }
+    }
+}
+
+impl Debug for Eval {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self, f)
     }
 }
 
@@ -45,6 +54,14 @@ impl Eval {
             Ordering::Greater => Eval((-self.0) - 1),
         }
     }
+
+    pub fn plies(&self) -> u8 {
+        match self.0.cmp(&0) {
+            Ordering::Less => (self.0 - i8::MIN) as u8 * 2,
+            Ordering::Equal => u8::MAX,
+            Ordering::Greater => ((-self.0) - i8::MIN) as u8 * 2 - 1,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -62,7 +79,9 @@ mod tests {
     fn test_eval_cmp() {
         assert!(Eval::new_loss(10) > Eval::new_loss(8));
         assert!(Eval::new_tie() > Eval::new_loss(10));
+        assert!(Eval::new_tie() > Eval::new_loss(0));
         assert!(Eval::new_win(10) > Eval::new_tie());
+        assert!(Eval::new_win(1) > Eval::new_tie());
         assert!(Eval::new_win(10) > Eval::new_loss(10));
         assert!(Eval::new_win(8) > Eval::new_win(10));
     }
@@ -70,7 +89,19 @@ mod tests {
     #[test]
     fn test_eval_display() {
         assert_eq!("Loss: 5", format!("{}", Eval::new_loss(5)));
+        assert_eq!("Loss: 1", format!("{}", Eval::new_loss(1)));
+        assert_eq!("Loss: 0", format!("{}", Eval::new_loss(0)));
         assert_eq!("Win: 5", format!("{}", Eval::new_win(5)));
+        assert_eq!("Win: 1", format!("{}", Eval::new_win(1)));
         assert_eq!("Tie", format!("{}", Eval::new_tie()));
+    }
+
+    #[test]
+    fn test_eval_plies() {
+        assert_eq!(10, Eval::new_loss(5).plies());
+        assert_eq!(0, Eval::new_loss(0).plies());
+        assert_eq!(9, Eval::new_win(5).plies());
+        assert_eq!(1, Eval::new_win(1).plies());
+        assert_eq!(255, Eval::new_tie().plies());
     }
 }

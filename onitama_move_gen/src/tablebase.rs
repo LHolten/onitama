@@ -1,6 +1,6 @@
 use std::{
     alloc::{alloc_zeroed, Layout},
-    cmp::{max, Ordering},
+    cmp::{max, min, Ordering},
     mem::take,
     ops::{Index, IndexMut},
 };
@@ -17,7 +17,7 @@ type TableData = [[[[[Eval; 26]; 26]; 25]; 25]; 30];
 struct TableBase(Box<TableData>, Vec<Game>);
 
 impl TableBase {
-    fn new() -> Self {
+    pub fn new() -> Self {
         let val = unsafe {
             let layout = Layout::new::<TableData>();
             Box::from_raw(alloc_zeroed(layout) as *mut TableData)
@@ -44,14 +44,15 @@ impl TableBase {
                             other: (1 << 25).andn(1 << other) | 1 << other_king | other_king << 25,
                         };
                         table[game] = Eval::new_loss(0);
-                        assert!(game.is_loss());
-                        for (mut new_game, take) in game.backward() {
-                            if !new_game.is_other_loss() {
-                                table.check_win(new_game, Eval::new_win(1));
+                        for (mut prev_game, take) in game.backward() {
+                            if !prev_game.is_other_loss() {
+                                table.check_win(prev_game, Eval::new_win(1));
                             }
-                            new_game.other |= take;
-                            if !new_game.is_other_loss() {
-                                table.check_win(new_game, Eval::new_win(1));
+                            if (prev_game.other & PIECE_MASK).popcnt() < 2 {
+                                prev_game.other |= take;
+                                if !prev_game.is_other_loss() {
+                                    table.check_win(prev_game, Eval::new_win(1));
+                                }
                             }
                         }
                     }
@@ -68,23 +69,25 @@ impl TableBase {
                 }
                 let mut eval = Eval::new_loss(0);
                 for new_game in game.forward() {
-                    if new_game.is_loss() {
-                        eval = Eval::new_win(1);
+                    if table[new_game] == Eval::new_loss(0) {
+                        eval = Eval::new_tie();
                         break;
+                    } else {
+                        eval = max(eval, table[new_game].backward());
                     }
-                    eval = max(eval, table[new_game].backward());
                 }
                 table[game] = eval;
-                let prev_eval = eval.backward();
-                for (mut new_game, take) in game.backward() {
-                    table.check_win(new_game, prev_eval);
-                    if (game.other & PIECE_MASK).popcnt() < 2 {
-                        new_game.other |= take;
-                        table.check_win(new_game, prev_eval);
+                if eval < Eval::new_tie() {
+                    let prev_eval = eval.backward();
+                    for (mut prev_game, take) in game.backward() {
+                        table.check_win(prev_game, prev_eval);
+                        if (prev_game.other & PIECE_MASK).popcnt() < 2 {
+                            prev_game.other |= take;
+                            table.check_win(prev_game, prev_eval);
+                        }
                     }
                 }
             }
-            dbg!("list");
         }
 
         table
@@ -93,22 +96,50 @@ impl TableBase {
     fn check_win(&mut self, game: Game, eval: Eval) {
         if eval > self[game] {
             self[game] = eval;
-            let prev_eval = eval.backward();
-            for (mut new_game, take) in game.backward() {
-                self.check_loss(new_game, prev_eval);
-                if (game.other & PIECE_MASK).popcnt() < 2 {
-                    new_game.other |= take;
-                    self.check_loss(new_game, prev_eval);
+            for (mut prev_game, take) in game.backward() {
+                self.check_loss(prev_game);
+                if (prev_game.other & PIECE_MASK).popcnt() < 2 {
+                    prev_game.other |= take;
+                    self.check_loss(prev_game);
                 }
             }
         }
     }
 
-    fn check_loss(&mut self, game: Game, eval: Eval) {
+    fn check_loss(&mut self, game: Game) {
         if self[game] == Eval::new_tie() {
             self[game] = Eval::new_loss(0);
             self.1.push(game)
         }
+    }
+
+    pub fn eval(&self, game: Game) -> Eval {
+        let my_king = game.my.wrapping_shr(25);
+        let mut my = game.my ^ 1 << my_king;
+        if my == 0 {
+            my |= 1 << 25
+        }
+        let other_king = game.other.wrapping_shr(25);
+        let mut other = game.other ^ 1 << other_king;
+        if other == 0 {
+            other |= 1 << 25;
+        }
+
+        let mut max_eval = Eval::new_loss(0);
+        for m in BitIter(my) {
+            let mut min_eval = Eval::new_win(1);
+            for o in BitIter(other) {
+                let new_game = Game {
+                    my: (1 << 25).andn(1 << m) | 1 << my_king | my_king << 25,
+                    other: (1 << 25).andn(1 << o) | 1 << other_king | other_king << 25,
+                    my_cards: game.my_cards,
+                    other_cards: game.other_cards,
+                };
+                min_eval = min(min_eval, self[new_game])
+            }
+            max_eval = max(max_eval, min_eval);
+        }
+        max_eval
     }
 }
 
@@ -193,20 +224,24 @@ pub fn card_config() -> [(u8, u8); 30] {
 
 fn compress_pieces(my: u32) -> u32 {
     let mut piece_iter = BitIter((1 << my.wrapping_shr(25)).andn(my) & PIECE_MASK);
-    piece_iter.next().unwrap_or(25)
+    let piece_pos = piece_iter.next().unwrap_or(25);
+    // assert!(piece_iter.next().is_none());
+    piece_pos
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
-    use super::{card_config, compress_cards, piece_config, TableBase};
+    use super::{card_config, compress_cards, compress_pieces, piece_config, TableBase};
 
     #[test]
     fn test_pieces() {
         let mut set = HashSet::new();
-        for val in piece_config(0) {
-            assert!(set.insert(val));
+        for (m, o) in piece_config(0) {
+            let m = 1 << 24 >> m | 25 << 25;
+            let o = 1 << 24 >> o | 25 << 25;
+            assert!(set.insert((compress_pieces(m), compress_pieces(o))));
         }
         assert!(set.len() == 651)
     }
@@ -217,14 +252,31 @@ mod tests {
         for &(my_cards, other_cards) in &card_config() {
             let val = compress_cards(my_cards, other_cards);
             assert!(val < 30);
-            assert!(!set.contains(&val));
-            set.insert(val);
+            assert!(set.insert(val));
         }
         assert!(set.len() == 30)
     }
 
     #[test]
     fn test_tablebase() {
-        TableBase::new();
+        let mut counts = [0; 256];
+        let table = TableBase::new();
+        for v in table.0.iter() {
+            for v in v {
+                for v in v {
+                    for v in v {
+                        for v in v {
+                            counts[v.plies() as usize] += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(counts[0] == 1229010);
+        assert!(counts[7] == 294903);
+        assert!(counts[56] == 65);
+        // for (i, &c) in counts.iter().enumerate() {
+        //     println!("{}: {}", i, c);
+        // }
     }
 }

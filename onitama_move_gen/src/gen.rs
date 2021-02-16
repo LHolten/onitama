@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use bitintr::{Andn, Popcnt, Tzcnt};
 use nudge::assume;
 
@@ -6,12 +8,31 @@ use crate::{SHIFTED, SHIFTED_L, SHIFTED_R, SHIFTED_U};
 
 pub const PIECE_MASK: u32 = (1 << 25) - 1;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct Game {
     pub my: u32,
     pub other: u32,
     pub my_cards: u8,
     pub other_cards: u8,
+}
+
+impl Debug for Game {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for i in 0..5 {
+            f.write_str("\n")?;
+            for j in 0..5 {
+                let pos = i * 5 + j;
+                if self.my & 1 << pos != 0 {
+                    f.write_str("x")?;
+                } else if self.other & 1 << 24 >> pos != 0 {
+                    f.write_str("o")?;
+                } else {
+                    f.write_str(".")?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Game {
@@ -184,7 +205,6 @@ impl Iterator for GameIter<'_> {
             other_cards: my_cards,
             my_cards: self.game.other_cards,
         };
-
         Some(new_game)
     }
 }
@@ -201,6 +221,7 @@ pub struct GameBackIter<'a> {
 impl Iterator for GameBackIter<'_> {
     type Item = (Game, u32); // (no)take
 
+    // #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         let table_card = (u8::MAX ^ self.game.my_cards ^ self.game.other_cards).tzcnt();
 
@@ -227,14 +248,12 @@ impl Iterator for GameBackIter<'_> {
             other = other & PIECE_MASK | from_curr << 25;
         };
 
-        Some((
-            Game {
-                my: other,
-                other: self.game.my,
-                my_cards: other_cards,
-                other_cards: self.game.my_cards,
-            },
-            (1 << 24) >> self.to_curr,
-        ))
+        let prev_game = Game {
+            my: other,
+            other: self.game.my,
+            my_cards: other_cards,
+            other_cards: self.game.my_cards,
+        };
+        Some((prev_game, (1 << 24) >> self.to_curr))
     }
 }

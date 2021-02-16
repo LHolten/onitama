@@ -1,4 +1,11 @@
-use bitintr::Popcnt;
+use std::{
+    alloc::{alloc_zeroed, Layout},
+    cmp::Ordering,
+    mem::take,
+    ops::{Index, IndexMut},
+};
+
+use bitintr::{Andn, Popcnt};
 
 use crate::{
     eval::Eval,
@@ -6,172 +13,236 @@ use crate::{
     ops::{BitIter, CardIter},
 };
 
-#[derive(Default)]
-struct OppTable {
-    eval: Option<Eval>,
-    data: [Option<Box<OppTable>>; 25],
-}
-
-#[derive(Default)]
-struct MyTable {
-    opp_table: OppTable,
-    data: [Option<Box<MyTable>>; 25],
-}
-
-#[derive(Default)]
-struct TableBase {
-    data: [[[MyTable; 25]; 25]; 30],
-}
+type TableData = [[[[[Eval; 26 * 13]; 26 * 13]; 25]; 25]; 30];
+struct TableBase(Box<TableData>, Vec<(Game, Eval)>);
 
 impl TableBase {
-    fn lookup(&self, game: &Game) -> Option<Eval> {
-        let my_king = game.my.wrapping_shr(25);
-        let other_king = game.other.wrapping_shr(25); // not rotated
-        let cards = compress_cards(game.my_cards, game.other_cards);
-        let mut my_table = &self.data[cards as usize][my_king as usize][other_king as usize];
-        for pos in BitIter(game.my & PIECE_MASK ^ 1 << my_king) {
-            my_table = my_table.data[pos as usize].as_ref()?
-        }
-        let mut opp_table = &my_table.opp_table;
-        for pos in BitIter(game.other & PIECE_MASK ^ 1 << other_king) {
-            opp_table = opp_table.data[pos as usize].as_ref()?
-        }
-        opp_table.eval
-    }
-
-    fn store(&mut self, game: &Game, eval: Eval) {
-        let my_king = game.my.wrapping_shr(25);
-        let other_king = game.other.wrapping_shr(25); // not rotated
-        let cards = compress_cards(game.my_cards, game.other_cards);
-        let mut my_table = &mut self.data[cards as usize][my_king as usize][other_king as usize];
-        for pos in BitIter(game.my & PIECE_MASK ^ 1 << my_king) {
-            if my_table.data[pos as usize].is_none() {
-                my_table.data[pos as usize] = Some(Box::new(MyTable::default()))
-            }
-            my_table = my_table.data[pos as usize].as_mut().unwrap()
-        }
-        let mut opp_table = &mut my_table.opp_table;
-        for pos in BitIter(game.other & PIECE_MASK ^ 1 << other_king) {
-            if opp_table.data[pos as usize].is_none() {
-                opp_table.data[pos as usize] = Some(Box::new(OppTable::default()))
-            }
-            opp_table = opp_table.data[pos as usize].as_mut().unwrap()
-        }
-        opp_table.eval = Some(eval);
-    }
-
     fn new() -> Self {
-        let mut table = TableBase::default();
+        let val = unsafe {
+            let layout = Layout::new::<TableData>();
+            Box::from_raw(alloc_zeroed(layout) as *mut TableData)
+        };
+        let mut table = TableBase(val, Vec::new());
+        let cards = card_config();
 
-        for pos in 0..25u32 {
-            if pos == 22 || pos == 2 {
-                continue;
-            };
-            for (my_cards, other_cards) in card_config() {
-                let game = Game {
-                    my: 1 << pos | pos.wrapping_shl(25),
-                    other: 1 << 22 | 22u32.wrapping_shl(25),
-                    my_cards,
-                    other_cards,
+        for other_king in 0..25 {
+            for (m1, m2, o1, o2) in piece_config(1 << 24 >> other_king) {
+                let full_other = 1 << 24 >> o1 | 1 << 24 >> o2 | 1 << 24 >> other_king;
+                let my_king_iter = if other_king == 22 {
+                    BitIter((1 << 22).andn(PIECE_MASK))
+                } else {
+                    BitIter((1 << 22).andn(full_other))
                 };
-                for (prev, prev2) in game.backwards() {
-                    table.update(prev);
-                    table.update(prev2);
+                for my_king in my_king_iter {
+                    for &(my_cards, other_cards) in &cards {
+                        let game = Game {
+                            my_cards,
+                            other_cards,
+                            my: (1 << 25).andn(1 << m1 | 1 << m2)
+                                | full_other.andn(1 << my_king)
+                                | my_king << 25,
+                            other: (1 << 25).andn(1 << o1 | 1 << o2)
+                                | 1 << other_king
+                                | other_king << 25,
+                        };
+                        table[game] = Eval::new_loss(0);
+                        assert!(game.is_loss());
+                        for (mut new_game, take) in game.backward() {
+                            if !new_game.is_other_loss() {
+                                table.update(new_game, Eval::new_win(1));
+                            }
+                            new_game.other |= take;
+                            if !new_game.is_other_loss() {
+                                table.update(new_game, Eval::new_win(1));
+                            }
+                        }
+                    }
                 }
             }
+            dbg!("done");
         }
+
+        // while !table.1.is_empty() {
+        //     let list = take(&mut table.1);
+        //     for (game, mut eval) in list {
+        //         if eval >= table[game] {
+        //             assert!(eval == table[game]);
+        //             continue;
+        //         }
+        //         for new_game in game.forward() {
+        //             if table[new_game].backward() == table[game] {
+        //                 return;
+        //             }
+        //             if new_game.is_loss() {
+        //                 eval = Eval::new_win(1);
+        //                 break;
+        //             }
+        //             eval = min(next_eval, table[new_game].backward());
+        //         }
+        //         table.check(game, eval)
+        //     }
+        // }
+
         table
     }
 
-    fn update(&mut self, game: Game) {
-        if self.lookup(&game).is_some() {
-            todo!()
+    fn check(&mut self, game: Game, eval: Eval) {
+        match eval.cmp(&self[game]) {
+            Ordering::Less => self.1.push((game, eval)),
+            Ordering::Equal => {}
+            Ordering::Greater => self.update(game, eval),
+        }
+    }
+
+    fn update(&mut self, game: Game, eval: Eval) {
+        self[game] = eval;
+        let prev_eval = eval.backward();
+        for (mut new_game, take) in game.backward() {
+            self.check(new_game, prev_eval);
+            if (game.my & PIECE_MASK).popcnt() < 2 {
+                new_game.other |= take;
+                self.check(new_game, prev_eval);
+            }
+        }
+    }
+}
+
+impl Index<Game> for TableBase {
+    type Output = Eval;
+
+    fn index(&self, game: Game) -> &Self::Output {
+        let cards = compress_cards(game.my_cards, game.other_cards) as usize;
+        let my_king = game.my.wrapping_shr(25) as usize;
+        let other_king = game.other.wrapping_shr(25) as usize;
+        let my_pieces = compress_pieces(game.my) as usize;
+        let other_pieces = compress_pieces(game.other) as usize;
+
+        unsafe {
+            self.0
+                .get_unchecked(cards)
+                .get_unchecked(my_king)
+                .get_unchecked(other_king)
+                .get_unchecked(my_pieces)
+                .get_unchecked(other_pieces)
+        }
+    }
+}
+
+impl IndexMut<Game> for TableBase {
+    fn index_mut(&mut self, game: Game) -> &mut Self::Output {
+        let cards = compress_cards(game.my_cards, game.other_cards) as usize;
+        let my_king = game.my.wrapping_shr(25) as usize;
+        let other_king = game.other.wrapping_shr(25) as usize;
+        let my_pieces = compress_pieces(game.my) as usize;
+        let other_pieces = compress_pieces(game.other) as usize;
+
+        unsafe {
+            self.0
+                .get_unchecked_mut(cards)
+                .get_unchecked_mut(my_king)
+                .get_unchecked_mut(other_king)
+                .get_unchecked_mut(my_pieces)
+                .get_unchecked_mut(other_pieces)
         }
     }
 }
 
 fn compress_cards(my_cards: u8, other_cards: u8) -> u8 {
-    let mut total = 0;
-    for card in CardIter::new(my_cards) {
-        total = total * 5 + card
-    }
-    if total >= 10 {
-        total = 19 - total
-    };
+    let mut card_iter = CardIter::new(my_cards);
+    let total = card_iter.next().unwrap() * 5 + card_iter.next().unwrap();
+    let total = if total >= 10 { 19 - total } else { total };
     total + 10 * ((!(my_cards | other_cards) - 1) & other_cards).popcnt()
 }
 
-pub fn card_config() -> impl Iterator<Item = (u8, u8)> {
-    (0..5)
-        .flat_map(|center| {
-            (0..4).flat_map(move |my1| ((my1 + 1)..5).map(move |my2| (center, my1, my2)))
-        })
-        .filter_map(|(center, my1, my2)| {
-            if center != my1 && center != my2 {
-                let my_cards = 1 << my1 | 1 << my2;
-                let other_cards = !my_cards ^ (1 << center);
-                Some((my_cards, other_cards))
-            } else {
-                None
-            }
+pub fn piece_config(mask: u32) -> impl Iterator<Item = (u32, u32, u32, u32)> {
+    (0..26)
+        .filter(move |&m1| (1 << m1) & mask == 0)
+        .flat_map(move |m1| {
+            let mask = mask | (1 << 25).andn(1 << m1);
+            (m1..26)
+                .filter(move |&m2| (1 << m2) & mask == 0 && (m2 == 25 || m1 != 25))
+                .flat_map(move |m2| {
+                    let mask = mask | (1 << 25).andn(1 << m2);
+                    (0..26)
+                        .filter(move |&o1| 1 << 24 >> o1 & mask == 0)
+                        .flat_map(move |o1| {
+                            let mask = mask | 1 << 24 >> o1;
+                            (o1..26)
+                                .filter(move |&o2| {
+                                    1 << 24 >> o2 & mask == 0 && (o2 == 25 || o1 != 25)
+                                })
+                                .map(move |o2| (m1, m2, o1, o2))
+                        })
+                })
         })
 }
 
-// #[cfg(test)]
-// mod tests {
-//     // Note this useful idiom: importing names from outer (for mod tests) scope.
-//     use std::thread;
+pub fn card_config() -> [(u8, u8); 30] {
+    let mut res = [(0, 0); 30];
+    let mut i = 0;
+    for center in 0..5 {
+        for my1 in 0..4 {
+            if center != my1 {
+                for my2 in my1 + 1..5 {
+                    if center != my2 {
+                        let my_cards = 1 << my1 | 1 << my2;
+                        let other_cards = !my_cards ^ (1 << center);
+                        res[i] = (my_cards, other_cards);
+                        i += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(i == 30);
+    res
+}
 
-//     use super::*;
+fn compress_pieces(my: u32) -> u32 {
+    let mut piece_iter = BitIter((1 << my.wrapping_shr(25)).andn(my) & PIECE_MASK);
+    let total = piece_iter.next().unwrap_or(25) * 26 + piece_iter.next().unwrap_or(25);
+    if total >= 26 * 13 {
+        26 * 26 - 1 - total
+    } else {
+        total
+    }
+}
 
-//     #[test]
-//     fn test_eval() {
-//         thread::Builder::new()
-//             .stack_size(1024 * 1024 * 10)
-//             .spawn(|| {
-//                 let mut tie = 0;
-//                 let mut loss = 0;
-//                 let mut win = 0;
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
 
-//                 let mut table = Box::new([None; 18750]);
-//                 for game in game_config() {
-//                     let new_index = SmallTable::compress(&game);
-//                     table[new_index] = Some(Eval::Tie);
-//                     let new_eval = table.eval(&game);
-//                     table[new_index] = Some(new_eval);
-//                     match new_eval {
-//                         Eval::Win => win += 1,
-//                         Eval::Loss => loss += 1,
-//                         Eval::Tie => tie += 1,
-//                     }
-//                 }
+    use super::{card_config, compress_cards, compress_pieces, piece_config, TableBase};
 
-//                 println!("win: {}, loss: {}, tie: {}", win, loss, tie);
+    #[test]
+    fn test_compress_pieces() {
+        let mut set = HashSet::new();
+        for (m1, m2, o1, o2) in piece_config(0) {
+            let val = (
+                compress_pieces(1 << m1 | 1 << m2 | 25 << 25),
+                compress_pieces(1 << o1 | 1 << o2 | 25 << 25),
+            );
+            assert!(val.0 < 26 * 13 && val.1 < 26 * 13);
+            assert!(!set.contains(&val));
+            set.insert(val);
+        }
+        assert!(set.len() == 90951)
+    }
 
-//                 for game in game_config() {
-//                     let new_index = SmallTable::compress(&game);
-//                     if let Some(eval) = table[new_index] {
-//                         assert_eq!(eval, table.eval(&game))
-//                     } else {
-//                         unreachable!()
-//                     }
-//                 }
-//             })
-//             .unwrap()
-//             .join()
-//             .unwrap();
-//     }
+    #[test]
+    fn test_compress_cards() {
+        let mut set = HashSet::new();
+        for &(my_cards, other_cards) in &card_config() {
+            let val = compress_cards(my_cards, other_cards);
+            assert!(val < 30);
+            assert!(!set.contains(&val));
+            set.insert(val);
+        }
+        assert!(set.len() == 30)
+    }
 
-//     #[test]
-//     fn test_compress() {
-//         let mut table = Box::new([false; 18750]);
-//         let mut num = 0;
-//         for game in game_config() {
-//             let new_index = SmallTable::compress(&game);
-//             assert!(!table[new_index]);
-//             table[new_index] = true;
-//             num += 1;
-//         }
-//         println!("{}", num)
-//     }
-// }
+    #[test]
+    fn test_tablebase() {
+        TableBase::new();
+    }
+}

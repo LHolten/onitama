@@ -1,6 +1,6 @@
 use std::{
     alloc::{alloc_zeroed, Layout},
-    cmp::Ordering,
+    cmp::{max, Ordering},
     mem::take,
     ops::{Index, IndexMut},
 };
@@ -13,8 +13,8 @@ use crate::{
     ops::{BitIter, CardIter},
 };
 
-type TableData = [[[[[Eval; 26 * 13]; 26 * 13]; 25]; 25]; 30];
-struct TableBase(Box<TableData>, Vec<(Game, Eval)>);
+type TableData = [[[[[Eval; 26]; 26]; 25]; 25]; 30];
+struct TableBase(Box<TableData>, Vec<Game>);
 
 impl TableBase {
     fn new() -> Self {
@@ -26,8 +26,8 @@ impl TableBase {
         let cards = card_config();
 
         for other_king in 0..25 {
-            for (m1, m2, o1, o2) in piece_config(1 << 24 >> other_king) {
-                let full_other = 1 << 24 >> o1 | 1 << 24 >> o2 | 1 << 24 >> other_king;
+            for (my, other) in piece_config(1 << 24 >> other_king) {
+                let full_other = 1 << 24 >> other | 1 << 24 >> other_king;
                 let my_king_iter = if other_king == 22 {
                     BitIter((1 << 22).andn(PIECE_MASK))
                 } else {
@@ -38,22 +38,20 @@ impl TableBase {
                         let game = Game {
                             my_cards,
                             other_cards,
-                            my: (1 << 25).andn(1 << m1 | 1 << m2)
+                            my: (1 << 25).andn(1 << my)
                                 | full_other.andn(1 << my_king)
                                 | my_king << 25,
-                            other: (1 << 25).andn(1 << o1 | 1 << o2)
-                                | 1 << other_king
-                                | other_king << 25,
+                            other: (1 << 25).andn(1 << other) | 1 << other_king | other_king << 25,
                         };
                         table[game] = Eval::new_loss(0);
                         assert!(game.is_loss());
                         for (mut new_game, take) in game.backward() {
                             if !new_game.is_other_loss() {
-                                table.update(new_game, Eval::new_win(1));
+                                table.check_win(new_game, Eval::new_win(1));
                             }
                             new_game.other |= take;
                             if !new_game.is_other_loss() {
-                                table.update(new_game, Eval::new_win(1));
+                                table.check_win(new_game, Eval::new_win(1));
                             }
                         }
                     }
@@ -62,47 +60,54 @@ impl TableBase {
             dbg!("done");
         }
 
-        // while !table.1.is_empty() {
-        //     let list = take(&mut table.1);
-        //     for (game, mut eval) in list {
-        //         if eval >= table[game] {
-        //             assert!(eval == table[game]);
-        //             continue;
-        //         }
-        //         for new_game in game.forward() {
-        //             if table[new_game].backward() == table[game] {
-        //                 return;
-        //             }
-        //             if new_game.is_loss() {
-        //                 eval = Eval::new_win(1);
-        //                 break;
-        //             }
-        //             eval = min(next_eval, table[new_game].backward());
-        //         }
-        //         table.check(game, eval)
-        //     }
-        // }
+        while !table.1.is_empty() {
+            dbg!(table.1.len());
+            for game in take(&mut table.1) {
+                if table[game] != Eval::new_loss(0) {
+                    continue;
+                }
+                let mut eval = Eval::new_loss(0);
+                for new_game in game.forward() {
+                    if new_game.is_loss() {
+                        eval = Eval::new_win(1);
+                        break;
+                    }
+                    eval = max(eval, table[new_game].backward());
+                }
+                table[game] = eval;
+                let prev_eval = eval.backward();
+                for (mut new_game, take) in game.backward() {
+                    table.check_win(new_game, prev_eval);
+                    if (game.other & PIECE_MASK).popcnt() < 2 {
+                        new_game.other |= take;
+                        table.check_win(new_game, prev_eval);
+                    }
+                }
+            }
+            dbg!("list");
+        }
 
         table
     }
 
-    fn check(&mut self, game: Game, eval: Eval) {
-        match eval.cmp(&self[game]) {
-            Ordering::Less => self.1.push((game, eval)),
-            Ordering::Equal => {}
-            Ordering::Greater => self.update(game, eval),
+    fn check_win(&mut self, game: Game, eval: Eval) {
+        if eval > self[game] {
+            self[game] = eval;
+            let prev_eval = eval.backward();
+            for (mut new_game, take) in game.backward() {
+                self.check_loss(new_game, prev_eval);
+                if (game.other & PIECE_MASK).popcnt() < 2 {
+                    new_game.other |= take;
+                    self.check_loss(new_game, prev_eval);
+                }
+            }
         }
     }
 
-    fn update(&mut self, game: Game, eval: Eval) {
-        self[game] = eval;
-        let prev_eval = eval.backward();
-        for (mut new_game, take) in game.backward() {
-            self.check(new_game, prev_eval);
-            if (game.my & PIECE_MASK).popcnt() < 2 {
-                new_game.other |= take;
-                self.check(new_game, prev_eval);
-            }
+    fn check_loss(&mut self, game: Game, eval: Eval) {
+        if self[game] == Eval::new_tie() {
+            self[game] = Eval::new_loss(0);
+            self.1.push(game)
         }
     }
 }
@@ -154,26 +159,14 @@ fn compress_cards(my_cards: u8, other_cards: u8) -> u8 {
     total + 10 * ((!(my_cards | other_cards) - 1) & other_cards).popcnt()
 }
 
-pub fn piece_config(mask: u32) -> impl Iterator<Item = (u32, u32, u32, u32)> {
+pub fn piece_config(mask: u32) -> impl Iterator<Item = (u32, u32)> {
     (0..26)
-        .filter(move |&m1| (1 << m1) & mask == 0)
-        .flat_map(move |m1| {
-            let mask = mask | (1 << 25).andn(1 << m1);
-            (m1..26)
-                .filter(move |&m2| (1 << m2) & mask == 0 && (m2 == 25 || m1 != 25))
-                .flat_map(move |m2| {
-                    let mask = mask | (1 << 25).andn(1 << m2);
-                    (0..26)
-                        .filter(move |&o1| 1 << 24 >> o1 & mask == 0)
-                        .flat_map(move |o1| {
-                            let mask = mask | 1 << 24 >> o1;
-                            (o1..26)
-                                .filter(move |&o2| {
-                                    1 << 24 >> o2 & mask == 0 && (o2 == 25 || o1 != 25)
-                                })
-                                .map(move |o2| (m1, m2, o1, o2))
-                        })
-                })
+        .filter(move |&my| (1 << my) & mask == 0)
+        .flat_map(move |my| {
+            let mask = mask | (1 << 25).andn(1 << my);
+            (0..26)
+                .filter(move |&other| 1 << 24 >> other & mask == 0)
+                .map(move |other| (my, other))
         })
 }
 
@@ -200,33 +193,22 @@ pub fn card_config() -> [(u8, u8); 30] {
 
 fn compress_pieces(my: u32) -> u32 {
     let mut piece_iter = BitIter((1 << my.wrapping_shr(25)).andn(my) & PIECE_MASK);
-    let total = piece_iter.next().unwrap_or(25) * 26 + piece_iter.next().unwrap_or(25);
-    if total >= 26 * 13 {
-        26 * 26 - 1 - total
-    } else {
-        total
-    }
+    piece_iter.next().unwrap_or(25)
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
-    use super::{card_config, compress_cards, compress_pieces, piece_config, TableBase};
+    use super::{card_config, compress_cards, piece_config, TableBase};
 
     #[test]
-    fn test_compress_pieces() {
+    fn test_pieces() {
         let mut set = HashSet::new();
-        for (m1, m2, o1, o2) in piece_config(0) {
-            let val = (
-                compress_pieces(1 << m1 | 1 << m2 | 25 << 25),
-                compress_pieces(1 << o1 | 1 << o2 | 25 << 25),
-            );
-            assert!(val.0 < 26 * 13 && val.1 < 26 * 13);
-            assert!(!set.contains(&val));
-            set.insert(val);
+        for val in piece_config(0) {
+            assert!(set.insert(val));
         }
-        assert!(set.len() == 90951)
+        assert!(set.len() == 651)
     }
 
     #[test]

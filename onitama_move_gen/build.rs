@@ -1,6 +1,7 @@
 extern crate build_const;
 use build_const::ConstWriter;
 
+#[allow(clippy::unusual_byte_groupings)]
 const CARDS: [(&str, u32, u8); 16] = [
     ("ox", 0b00000_00100_00010_00100_00000, 0),
     ("boar", 0b00000_00100_01010_00000_00000, 1),
@@ -21,6 +22,7 @@ const CARDS: [(&str, u32, u8); 16] = [
 ];
 
 fn shift(m: u32, pos: usize) -> u32 {
+    #[allow(clippy::unusual_byte_groupings)]
     const MASK: [u32; 5] = [
         0b00111_00111_00111_00111_00111,
         0b01111_01111_01111_01111_01111,
@@ -40,7 +42,7 @@ fn main() {
     let mut shifted_u = [[0; 25]; 16];
     for card in 0..16 {
         let m = CARDS[card].1;
-        let r = CARDS[card].1.reverse_bits();
+        let r = CARDS[card].1.reverse_bits() >> 7;
         for pos in 0..25 {
             let m = shift(m, pos);
             let r = shift(r, pos);

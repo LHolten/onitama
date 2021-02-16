@@ -3,8 +3,8 @@ use crate::gen::Game;
 #[inline(never)]
 fn perft(game: Game, depth: u8) -> u64 {
     let mut total = 0;
-    for (new_game, win) in game.forward() {
-        if win {
+    for new_game in game.forward() {
+        if new_game.is_loss() {
             total += 1;
         } else if depth == 2 {
             total += new_game.count_moves();
@@ -28,7 +28,6 @@ pub fn perft_test(depth: u8) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    // Note this useful idiom: importing names from outer (for mod tests) scope.
     use super::*;
 
     #[test]

@@ -1,33 +1,49 @@
-use std::{cmp::Ordering, fmt::Display, num::NonZeroU8};
+use std::{cmp::Ordering, fmt::Display};
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct Eval(NonZeroU8);
+pub struct Eval(i8);
 
 impl Display for Eval {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let tie = i8::MAX as u8;
-        let val = self.0.get();
-        match val.cmp(&tie) {
-            Ordering::Greater => write!(f, "Win: {}", val.wrapping_neg()),
-            Ordering::Less => write!(f, "Loss: {}", val),
+        match self.0.cmp(&0) {
+            Ordering::Greater => write!(f, "Win: {}", (-self.0) - i8::MIN),
+            Ordering::Less => write!(f, "Loss: {}", self.0 - i8::MIN),
             Ordering::Equal => write!(f, "Tie"),
         }
     }
 }
 
 impl Eval {
-    pub fn new_win(steps: u8) -> Self {
-        assert!(steps < i8::MAX as u8);
-        Eval(NonZeroU8::new(steps.wrapping_neg()).unwrap())
+    pub fn new_win(steps: i8) -> Self {
+        assert!((1..=i8::MAX).contains(&steps));
+        Eval(-(i8::MIN + steps))
     }
 
-    pub fn new_loss(steps: u8) -> Self {
-        assert!(steps < i8::MAX as u8);
-        Eval(NonZeroU8::new(steps).unwrap())
+    pub fn new_loss(steps: i8) -> Self {
+        assert!((0..=i8::MAX).contains(&steps));
+        Eval(i8::MIN + steps)
     }
 
     pub fn new_tie() -> Self {
-        Eval(NonZeroU8::new(i8::MAX as u8).unwrap())
+        Eval(0)
+    }
+
+    pub fn backward(&self) -> Self {
+        assert!(self.0 != -1);
+        match self.0.cmp(&0) {
+            Ordering::Less => Eval(-(self.0 + 1)),
+            Ordering::Equal => Eval(0),
+            Ordering::Greater => Eval(-self.0),
+        }
+    }
+
+    pub fn forward(&self) -> Self {
+        assert!(self.0 != i8::MIN);
+        match self.0.cmp(&0) {
+            Ordering::Less => Eval(-self.0),
+            Ordering::Equal => Eval(0),
+            Ordering::Greater => Eval((-self.0) - 1),
+        }
     }
 }
 
@@ -39,7 +55,7 @@ mod tests {
 
     #[test]
     fn test_eval_size() {
-        assert_eq!(size_of::<Option<Eval>>(), 1)
+        assert_eq!(size_of::<Eval>(), 1)
     }
 
     #[test]

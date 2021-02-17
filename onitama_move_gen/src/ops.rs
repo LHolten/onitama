@@ -19,12 +19,12 @@ impl Iterator for BitIter {
 }
 
 pub struct CardIter {
-    card1: Option<u8>,
-    card2: Option<u8>,
+    card1: Option<u32>,
+    card2: Option<u32>,
 }
 
 impl CardIter {
-    pub fn new(mut value: u8) -> Self {
+    pub fn new(mut value: u32) -> Self {
         let card1 = Some(value.tzcnt());
         unsafe { assume(value != 0) }
         value = value.blsr();
@@ -34,7 +34,7 @@ impl CardIter {
 }
 
 impl Iterator for CardIter {
-    type Item = u8;
+    type Item = u32;
 
     fn next(&mut self) -> Option<Self::Item> {
         let val = self.card1;

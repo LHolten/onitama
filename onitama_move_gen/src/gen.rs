@@ -12,8 +12,8 @@ pub const PIECE_MASK: u32 = (1 << 25) - 1;
 pub struct Game {
     pub my: u32,
     pub other: u32,
-    pub my_cards: u8,
-    pub other_cards: u8,
+    pub cards: u32,
+    pub table: u32,
 }
 
 impl Debug for Game {
@@ -96,14 +96,14 @@ impl Game {
     }
 
     fn next_my_card(&self) -> CardIter {
-        CardIter::new(self.my_cards)
+        CardIter::new(self.cards)
     }
 
     fn next_other_card(&self) -> CardIter {
-        CardIter::new(self.other_cards)
+        CardIter::new(self.cards.wrapping_shr(16))
     }
 
-    fn next_to(&self, from: u32, card: u8) -> BitIter {
+    fn next_to(&self, from: u32, card: u32) -> BitIter {
         let &shifted = unsafe {
             SHIFTED
                 .get_unchecked(card as usize)
@@ -112,7 +112,7 @@ impl Game {
         BitIter(self.my.andn(shifted))
     }
 
-    fn next_from(&self, to: u32, card: u8) -> BitIter {
+    fn next_from(&self, to: u32, card: u32) -> BitIter {
         let &shifted = unsafe {
             SHIFTED_R
                 .get_unchecked(card as usize)
@@ -142,12 +142,11 @@ impl Game {
     }
 
     pub fn backward(&self) -> GameBackIter {
-        let table_card = (u8::MAX ^ self.my_cards ^ self.other_cards).tzcnt();
         let mut to = self.next_other();
         let to_curr = to.next().unwrap();
         let mut card = self.next_other_card();
         let card_curr = card.next().unwrap();
-        let from = self.next_from(to_curr, table_card);
+        let from = self.next_from(to_curr, self.table);
         GameBackIter {
             game: self,
             to,
@@ -164,7 +163,7 @@ pub struct GameIter<'a> {
     from: BitIter,
     from_curr: u32,
     card: CardIter,
-    card_curr: u8,
+    card_curr: u32,
     to: BitIter,
 }
 
@@ -192,7 +191,8 @@ impl Iterator for GameIter<'_> {
         let to_other = 1 << 24 >> to_curr;
         let other = to_other.andn(self.game.other);
 
-        let my_cards = 1 << self.card_curr ^ !self.game.other_cards;
+        let my_cards = self.game.cards ^ 1 << self.card_curr ^ 1 << self.game.table;
+        let cards = my_cards.wrapping_shl(16) | my_cards.wrapping_shr(16);
         let mut my = self.game.my ^ (1 << self.from_curr) ^ (1 << to_curr);
 
         if self.from_curr == my_king {
@@ -202,8 +202,8 @@ impl Iterator for GameIter<'_> {
         let new_game = Game {
             other: my,
             my: other,
-            other_cards: my_cards,
-            my_cards: self.game.other_cards,
+            cards,
+            table: self.card_curr,
         };
         Some(new_game)
     }
@@ -214,7 +214,7 @@ pub struct GameBackIter<'a> {
     to: BitIter,
     to_curr: u32,
     card: CardIter,
-    card_curr: u8,
+    card_curr: u32,
     from: BitIter,
 }
 
@@ -223,8 +223,6 @@ impl Iterator for GameBackIter<'_> {
 
     // #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        let table_card = (u8::MAX ^ self.game.my_cards ^ self.game.other_cards).tzcnt();
-
         let mut from_new = self.from.next();
         while from_new.is_none() {
             let mut card_new = self.card.next();
@@ -234,14 +232,15 @@ impl Iterator for GameBackIter<'_> {
                 card_new = self.card.next();
             }
             self.card_curr = card_new.unwrap();
-            self.from = self.game.next_from(self.to_curr, table_card);
+            self.from = self.game.next_from(self.to_curr, self.game.table);
             from_new = self.from.next();
         }
         let from_curr = from_new.unwrap();
 
         let other_king = self.game.other.wrapping_shr(25);
 
-        let other_cards = 1 << self.card_curr ^ !self.game.my_cards;
+        let cards = self.game.cards.wrapping_shl(16) | self.game.cards.wrapping_shr(16);
+        let cards = cards ^ 1 << self.card_curr ^ 1 << self.game.table;
         let mut other = self.game.other ^ (1 << self.to_curr) ^ (1 << from_curr);
 
         if self.to_curr == other_king {
@@ -251,8 +250,8 @@ impl Iterator for GameBackIter<'_> {
         let prev_game = Game {
             my: other,
             other: self.game.my,
-            my_cards: other_cards,
-            other_cards: self.game.my_cards,
+            cards,
+            table: self.card_curr,
         };
         Some((prev_game, (1 << 24) >> self.to_curr))
     }

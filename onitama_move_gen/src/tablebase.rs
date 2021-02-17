@@ -1,11 +1,11 @@
 use std::{
     alloc::{alloc_zeroed, Layout},
-    cmp::{max, min, Ordering},
+    cmp::{max, min},
     mem::take,
     ops::{Index, IndexMut},
 };
 
-use bitintr::{Andn, Popcnt};
+use bitintr::{Andn, Pext, Popcnt};
 
 use crate::{
     eval::Eval,
@@ -14,7 +14,7 @@ use crate::{
 };
 
 type TableData = [[[[[Eval; 26]; 26]; 25]; 25]; 30];
-struct TableBase(Box<TableData>, Vec<Game>);
+pub struct TableBase(Box<TableData>, Vec<Game>);
 
 impl TableBase {
     pub fn new() -> Self {
@@ -34,10 +34,10 @@ impl TableBase {
                     BitIter((1 << 22).andn(full_other))
                 };
                 for my_king in my_king_iter {
-                    for &(my_cards, other_cards) in &cards {
+                    for &(cards, center) in &cards {
                         let game = Game {
-                            my_cards,
-                            other_cards,
+                            cards,
+                            table: center,
                             my: (1 << 25).andn(1 << my)
                                 | full_other.andn(1 << my_king)
                                 | my_king << 25,
@@ -132,8 +132,8 @@ impl TableBase {
                 let new_game = Game {
                     my: (1 << 25).andn(1 << m) | 1 << my_king | my_king << 25,
                     other: (1 << 25).andn(1 << o) | 1 << other_king | other_king << 25,
-                    my_cards: game.my_cards,
-                    other_cards: game.other_cards,
+                    cards: game.cards,
+                    table: game.table,
                 };
                 min_eval = min(min_eval, self[new_game])
             }
@@ -147,7 +147,7 @@ impl Index<Game> for TableBase {
     type Output = Eval;
 
     fn index(&self, game: Game) -> &Self::Output {
-        let cards = compress_cards(game.my_cards, game.other_cards) as usize;
+        let cards = compress_cards(game.cards, game.table) as usize;
         let my_king = game.my.wrapping_shr(25) as usize;
         let other_king = game.other.wrapping_shr(25) as usize;
         let my_pieces = compress_pieces(game.my) as usize;
@@ -166,7 +166,7 @@ impl Index<Game> for TableBase {
 
 impl IndexMut<Game> for TableBase {
     fn index_mut(&mut self, game: Game) -> &mut Self::Output {
-        let cards = compress_cards(game.my_cards, game.other_cards) as usize;
+        let cards = compress_cards(game.cards, game.table) as usize;
         let my_king = game.my.wrapping_shr(25) as usize;
         let other_king = game.other.wrapping_shr(25) as usize;
         let my_pieces = compress_pieces(game.my) as usize;
@@ -183,11 +183,10 @@ impl IndexMut<Game> for TableBase {
     }
 }
 
-fn compress_cards(my_cards: u8, other_cards: u8) -> u8 {
-    let mut card_iter = CardIter::new(my_cards);
-    let total = card_iter.next().unwrap() * 5 + card_iter.next().unwrap();
-    let total = if total >= 10 { 19 - total } else { total };
-    total + 10 * ((!(my_cards | other_cards) - 1) & other_cards).popcnt()
+fn compress_cards(cards: u32, table: u32) -> u32 {
+    let combined = cards | cards.wrapping_shr(16);
+    let temp = (((1 << table) - 1) & combined).popcnt();
+    temp * 6 + ((cards.pext(combined) & 7) - 1)
 }
 
 pub fn piece_config(mask: u32) -> impl Iterator<Item = (u32, u32)> {
@@ -201,7 +200,7 @@ pub fn piece_config(mask: u32) -> impl Iterator<Item = (u32, u32)> {
         })
 }
 
-pub fn card_config() -> [(u8, u8); 30] {
+pub fn card_config() -> [(u32, u32); 30] {
     let mut res = [(0, 0); 30];
     let mut i = 0;
     for center in 0..5 {
@@ -210,8 +209,11 @@ pub fn card_config() -> [(u8, u8); 30] {
                 for my2 in my1 + 1..5 {
                     if center != my2 {
                         let my_cards = 1 << my1 | 1 << my2;
-                        let other_cards = !my_cards ^ (1 << center);
-                        res[i] = (my_cards, other_cards);
+                        let mut other = CardIter::new(!my_cards ^ (1 << center));
+                        let cards = my_cards
+                            | 1 << 16 << other.next().unwrap()
+                            | 1 << 16 << other.next().unwrap();
+                        res[i] = (cards, center);
                         i += 1;
                     }
                 }
@@ -224,9 +226,7 @@ pub fn card_config() -> [(u8, u8); 30] {
 
 fn compress_pieces(my: u32) -> u32 {
     let mut piece_iter = BitIter((1 << my.wrapping_shr(25)).andn(my) & PIECE_MASK);
-    let piece_pos = piece_iter.next().unwrap_or(25);
-    // assert!(piece_iter.next().is_none());
-    piece_pos
+    piece_iter.next().unwrap_or(25)
 }
 
 #[cfg(test)]
@@ -249,8 +249,8 @@ mod tests {
     #[test]
     fn test_compress_cards() {
         let mut set = HashSet::new();
-        for &(my_cards, other_cards) in &card_config() {
-            let val = compress_cards(my_cards, other_cards);
+        for &(cards, table) in &card_config() {
+            let val = compress_cards(cards, table);
             assert!(val < 30);
             assert!(set.insert(val));
         }
@@ -275,8 +275,8 @@ mod tests {
         assert!(counts[0] == 1229010);
         assert!(counts[7] == 294903);
         assert!(counts[56] == 65);
-        // for (i, &c) in counts.iter().enumerate() {
-        //     println!("{}: {}", i, c);
-        // }
+        for (i, &c) in counts.iter().enumerate() {
+            println!("{}: {}", i, c);
+        }
     }
 }

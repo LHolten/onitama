@@ -17,10 +17,10 @@ fn perft(game: Game, depth: u8) -> u64 {
 
 pub fn perft_test(depth: u8) -> u64 {
     const TEST_GAME: Game = Game {
-        my: 0b11111 + (2 << 25),
-        my_cards: 0b0011,
-        other: 0b11111 + (2 << 25),
-        other_cards: 0b1100,
+        my: 0b11111 | 2 << 25,
+        other: 0b11111 | 2 << 25,
+        cards: 0b00011 | 0b01100 << 16,
+        table: 4,
     };
 
     perft(TEST_GAME, depth)

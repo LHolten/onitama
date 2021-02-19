@@ -40,6 +40,7 @@ fn main() {
     let mut shifted_r = [[0; 25]; 16];
     let mut shifted_l = [[0; 25]; 16];
     let mut shifted_u = [[0; 25]; 16];
+    let mut names = [""; 16];
     for card in 0..16 {
         let m = CARDS[card].1;
         let r = CARDS[card].1.reverse_bits() >> 7;
@@ -51,6 +52,7 @@ fn main() {
             shifted_l[card][pos] = m as u64;
             shifted_u[card][pos] = (m as u64) << 32;
         }
+        names[card] = CARDS[card].0;
     }
 
     let consts = ConstWriter::for_build("lut").unwrap();
@@ -59,5 +61,6 @@ fn main() {
     consts.add_value("SHIFTED_R", "[[u32; 25]; 16]", shifted_r);
     consts.add_value("SHIFTED_L", "[[u64; 25]; 16]", shifted_l);
     consts.add_value("SHIFTED_U", "[[u64; 25]; 16]", shifted_u);
+    consts.add_value("NAMES", "[&str; 16]", names);
     consts.finish();
 }

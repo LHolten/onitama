@@ -37,7 +37,7 @@ impl Eval {
         Eval(0)
     }
 
-    pub fn backward(&self) -> Self {
+    pub fn backward(self) -> Self {
         assert!(self.0 != -1);
         match self.0.cmp(&0) {
             Ordering::Less => Eval(-(self.0 + 1)),
@@ -46,7 +46,7 @@ impl Eval {
         }
     }
 
-    pub fn forward(&self) -> Self {
+    pub fn forward(self) -> Self {
         assert!(self.0 != i8::MIN);
         match self.0.cmp(&0) {
             Ordering::Less => Eval(-self.0),
@@ -55,7 +55,7 @@ impl Eval {
         }
     }
 
-    pub fn plies(&self) -> u8 {
+    pub fn plies(self) -> u8 {
         match self.0.cmp(&0) {
             Ordering::Less => (self.0 - i8::MIN) as u8 * 2,
             Ordering::Equal => u8::MAX,
@@ -103,5 +103,12 @@ mod tests {
         assert_eq!(9, Eval::new_win(5).plies());
         assert_eq!(1, Eval::new_win(1).plies());
         assert_eq!(255, Eval::new_tie().plies());
+    }
+
+    #[test]
+    fn forward_backward() {
+        for i in -127..=127 {
+            assert_eq!(Eval(i).forward().backward(), Eval(i))
+        }
     }
 }

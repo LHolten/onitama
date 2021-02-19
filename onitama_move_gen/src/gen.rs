@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use bitintr::{Andn, Popcnt, Tzcnt};
+use bitintr::{Andn, Popcnt};
 use nudge::assume;
 
 use crate::ops::{BitIter, CardIter};
@@ -18,6 +18,11 @@ pub struct Game {
 
 impl Debug for Game {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&format!(
+            "\nx: {}, o: {}",
+            self.my.wrapping_shr(25),
+            self.other.wrapping_shr(25)
+        ))?;
         for i in 0..5 {
             f.write_str("\n")?;
             for j in 0..5 {

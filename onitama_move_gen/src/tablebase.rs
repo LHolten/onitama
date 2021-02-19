@@ -17,13 +17,13 @@ type TableData = [[[[[Eval; 26]; 26]; 25]; 25]; 30];
 pub struct TableBase(Box<TableData>, Vec<Game>);
 
 impl TableBase {
-    pub fn new() -> Self {
+    pub fn new(cards: [u32; 5]) -> Self {
         let val = unsafe {
             let layout = Layout::new::<TableData>();
             Box::from_raw(alloc_zeroed(layout) as *mut TableData)
         };
         let mut table = TableBase(val, Vec::new());
-        let cards = card_config();
+        let cards = card_config(cards);
 
         for other_king in 0..25 {
             for (my, other) in piece_config(1 << 24 >> other_king) {
@@ -38,10 +38,8 @@ impl TableBase {
                         let game = Game {
                             cards,
                             table: center,
-                            my: (1 << 25).andn(1 << my)
-                                | full_other.andn(1 << my_king)
-                                | my_king << 25,
-                            other: (1 << 25).andn(1 << other) | 1 << other_king | other_king << 25,
+                            my: 1 << my & PIECE_MASK | 1 << my_king & !full_other | my_king << 25,
+                            other: 1 << other & PIECE_MASK | 1 << other_king | other_king << 25,
                         };
                         table[game] = Eval::new_loss(0);
                         for (mut prev_game, take) in game.backward() {
@@ -69,13 +67,16 @@ impl TableBase {
                 }
                 let mut eval = Eval::new_loss(0);
                 for new_game in game.forward() {
-                    if table[new_game] == Eval::new_loss(0) {
+                    if table[new_game] == Eval::new_loss(0) || table[new_game] == Eval::new_tie() {
                         eval = Eval::new_tie();
                         break;
                     } else {
+                        debug_assert!(table[new_game] >= Eval::new_tie());
                         eval = max(eval, table[new_game].backward());
                     }
                 }
+                debug_assert!(eval <= Eval::new_tie());
+                debug_assert!(eval != Eval::new_loss(0));
                 table[game] = eval;
                 if eval < Eval::new_tie() {
                     let prev_eval = eval.backward();
@@ -94,20 +95,22 @@ impl TableBase {
     }
 
     fn check_win(&mut self, game: Game, eval: Eval) {
+        debug_assert!(eval > Eval::new_tie());
         if eval > self[game] {
             self[game] = eval;
+            let prev_eval = eval.backward();
             for (mut prev_game, take) in game.backward() {
-                self.check_loss(prev_game);
+                self.check_loss(prev_game, prev_eval);
                 if (prev_game.other & PIECE_MASK).popcnt() < 2 {
                     prev_game.other |= take;
-                    self.check_loss(prev_game);
+                    self.check_loss(prev_game, prev_eval);
                 }
             }
         }
     }
 
-    fn check_loss(&mut self, game: Game) {
-        if self[game] == Eval::new_tie() {
+    fn check_loss(&mut self, game: Game, eval: Eval) {
+        if eval < self[game] && self[game] <= Eval::new_tie() {
             self[game] = Eval::new_loss(0);
             self.1.push(game)
         }
@@ -115,23 +118,34 @@ impl TableBase {
 
     pub fn eval(&self, game: Game) -> Eval {
         let my_king = game.my.wrapping_shr(25);
-        let mut my = game.my ^ 1 << my_king;
+        let mut my = game.my & PIECE_MASK ^ 1 << my_king;
         if my == 0 {
             my |= 1 << 25
         }
         let other_king = game.other.wrapping_shr(25);
-        let mut other = game.other ^ 1 << other_king;
+        let mut other = game.other & PIECE_MASK ^ 1 << other_king;
         if other == 0 {
             other |= 1 << 25;
         }
+
+        // let m = BitIter(my).next().unwrap_or(25);
+        // let o = BitIter(other).next().unwrap_or(25);
+
+        // let new_game = Game {
+        // my: (1 << m) & PIECE_MASK | 1 << my_king | my_king << 25,
+        // other: (1 << o) & PIECE_MASK | 1 << other_king | other_king << 25,
+        //     cards: game.cards,
+        //     table: game.table,
+        // };
+        // self[new_game]
 
         let mut max_eval = Eval::new_loss(0);
         for m in BitIter(my) {
             let mut min_eval = Eval::new_win(1);
             for o in BitIter(other) {
                 let new_game = Game {
-                    my: (1 << 25).andn(1 << m) | 1 << my_king | my_king << 25,
-                    other: (1 << 25).andn(1 << o) | 1 << other_king | other_king << 25,
+                    my: (1 << m) & PIECE_MASK | 1 << my_king | my_king << 25,
+                    other: (1 << o) & PIECE_MASK | 1 << other_king | other_king << 25,
                     cards: game.cards,
                     table: game.table,
                 };
@@ -193,29 +207,28 @@ pub fn piece_config(mask: u32) -> impl Iterator<Item = (u32, u32)> {
     (0..26)
         .filter(move |&my| (1 << my) & mask == 0)
         .flat_map(move |my| {
-            let mask = mask | (1 << 25).andn(1 << my);
+            let mask = mask | (1 << my) & PIECE_MASK;
             (0..26)
-                .filter(move |&other| 1 << 24 >> other & mask == 0)
+                .filter(move |&other| (1 << 24 >> other) & mask == 0)
                 .map(move |other| (my, other))
         })
 }
 
-pub fn card_config() -> [(u32, u32); 30] {
+pub fn card_config(cards: [u32; 5]) -> [(u32, u32); 30] {
     let mut res = [(0, 0); 30];
     let mut i = 0;
     for center in 0..5 {
         for my1 in 0..4 {
-            if center != my1 {
-                for my2 in my1 + 1..5 {
-                    if center != my2 {
-                        let my_cards = 1 << my1 | 1 << my2;
-                        let mut other = CardIter::new(!my_cards ^ (1 << center));
-                        let cards = my_cards
-                            | 1 << 16 << other.next().unwrap()
-                            | 1 << 16 << other.next().unwrap();
-                        res[i] = (cards, center);
-                        i += 1;
-                    }
+            for my2 in (my1 + 1)..5 {
+                if center != my1 && center != my2 {
+                    let my_cards = 1 << my1 | 1 << my2;
+                    let mut other = CardIter::new(!my_cards ^ (1 << center));
+                    let combined = 1 << cards[my1 as usize]
+                        | 1 << cards[my2 as usize]
+                        | 1 << 16 << cards[other.next().unwrap() as usize]
+                        | 1 << 16 << cards[other.next().unwrap() as usize];
+                    res[i] = (combined, cards[center as usize]);
+                    i += 1;
                 }
             }
         }
@@ -225,7 +238,8 @@ pub fn card_config() -> [(u32, u32); 30] {
 }
 
 fn compress_pieces(my: u32) -> u32 {
-    let mut piece_iter = BitIter((1 << my.wrapping_shr(25)).andn(my) & PIECE_MASK);
+    let king = 1 << my.wrapping_shr(25);
+    let mut piece_iter = BitIter(my & !king & PIECE_MASK);
     piece_iter.next().unwrap_or(25)
 }
 
@@ -249,18 +263,28 @@ mod tests {
     #[test]
     fn test_compress_cards() {
         let mut set = HashSet::new();
-        for &(cards, table) in &card_config() {
+        for &(cards, table) in &card_config([3, 4, 5, 6, 7]) {
             let val = compress_cards(cards, table);
             assert!(val < 30);
             assert!(set.insert(val));
         }
-        assert!(set.len() == 30)
+        assert_eq!(set.len(), 30);
+
+        let mut set2 = HashSet::new();
+        for &(cards, table) in &card_config([7, 6, 5, 4, 3]) {
+            let val = compress_cards(cards, table);
+            assert!(val < 30);
+            assert!(set2.insert(val));
+        }
+        assert_eq!(set2.len(), 30);
+
+        assert_eq!(set, set2);
     }
 
     #[test]
     fn test_tablebase() {
         let mut counts = [0; 256];
-        let table = TableBase::new();
+        let table = TableBase::new([4, 3, 2, 1, 0]);
         for v in table.0.iter() {
             for v in v {
                 for v in v {
@@ -272,9 +296,9 @@ mod tests {
                 }
             }
         }
-        assert!(counts[0] == 1229010);
-        assert!(counts[7] == 294903);
-        assert!(counts[56] == 65);
+        assert_eq!(counts[0], 1229010);
+        assert_eq!(counts[7], 299591);
+        assert_eq!(counts[56], 8);
         for (i, &c) in counts.iter().enumerate() {
             println!("{}: {}", i, c);
         }

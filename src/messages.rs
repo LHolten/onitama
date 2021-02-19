@@ -1,8 +1,11 @@
 use core::panic;
-use std::result::Result;
+use std::{result::Result, todo};
 
-use onitama_move_gen::gen::Game;
-use onitama_move_gen::NAMES;
+use onitama_move_gen::{
+    gen::{Game, PIECE_MASK},
+    ops::{BitIter, CardIter},
+};
+use onitama_move_gen::{CARD_HASH, KING_HASH, NAMES, PIECE_HASH};
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "messageType")]
@@ -82,12 +85,15 @@ impl StateObj {
         let red_cards = Self::cards(&self.cards.red);
         let blue_cards = Self::cards(&self.cards.blue);
         let table = Self::card_id(&self.cards.side);
+        let red_hash = Self::hash(red, red_cards);
+        let blue_hash = Self::hash(blue, blue_cards);
         if self.current_turn == "red" {
             Game {
                 my: red,
                 other: blue,
                 cards: red_cards | blue_cards << 16,
                 table,
+                hash: red_hash ^ blue_hash.swap_bytes(),
             }
         } else {
             Game {
@@ -95,6 +101,7 @@ impl StateObj {
                 other: red,
                 cards: blue_cards | red_cards << 16,
                 table,
+                hash: blue_hash ^ red_hash.swap_bytes(),
             }
         }
     }
@@ -124,6 +131,18 @@ impl StateObj {
             }
         }
         panic!(&format!("card not found: {}", card))
+    }
+
+    fn hash(board: u32, cards: u32) -> u32 {
+        let mut hash = 0;
+        for pos in BitIter(board & PIECE_MASK) {
+            hash ^= PIECE_HASH[pos as usize];
+        }
+        hash ^= KING_HASH[board.wrapping_shr(25) as usize];
+        for card in CardIter::new(cards) {
+            hash ^= CARD_HASH[card as usize];
+        }
+        hash
     }
 }
 

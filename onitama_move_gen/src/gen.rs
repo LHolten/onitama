@@ -4,16 +4,17 @@ use bitintr::{Andn, Popcnt};
 use nudge::assume;
 
 use crate::ops::{BitIter, CardIter};
-use crate::{SHIFTED, SHIFTED_L, SHIFTED_R, SHIFTED_U};
+use crate::{CARD_HASH, KING_HASH, PIECE_HASH, SHIFTED, SHIFTED_L, SHIFTED_R, SHIFTED_U};
 
 pub const PIECE_MASK: u32 = (1 << 25) - 1;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Hash)]
 pub struct Game {
     pub my: u32,
     pub other: u32,
     pub cards: u32,
     pub table: u32,
+    pub hash: u32,
 }
 
 impl Debug for Game {
@@ -80,11 +81,6 @@ impl Game {
             }
         }
         false
-    }
-
-    pub fn hash(&self) -> u16 {
-        let temp = self.my ^ self.other.swap_bytes();
-        (temp ^ temp.wrapping_shr(16) ^ self.cards ^ self.table) as u16
     }
 
     pub fn is_loss(&self) -> bool {
@@ -201,19 +197,31 @@ impl Iterator for GameIter<'_> {
         let to_other = 1 << 24 >> to_curr;
         let other = to_other.andn(self.game.other);
 
+        let mut hash = self.game.hash;
+
         let my_cards = self.game.cards ^ 1 << self.card_curr ^ 1 << self.game.table;
+        hash ^= CARD_HASH[self.card_curr as usize] ^ CARD_HASH[self.game.table as usize];
         let cards = my_cards.wrapping_shl(16) | my_cards.wrapping_shr(16);
+
         let mut my = self.game.my ^ (1 << self.from_curr) ^ (1 << to_curr);
+        hash ^= PIECE_HASH[self.from_curr as usize] ^ PIECE_HASH[to_curr as usize];
 
         if self.from_curr == my_king {
             my = my & PIECE_MASK | to_curr << 25;
+            hash ^= KING_HASH[self.from_curr as usize] ^ KING_HASH[to_curr as usize];
         };
+
+        hash = hash.swap_bytes();
+        if self.game.other & to_other != 0 {
+            hash ^= PIECE_HASH[(24 - to_curr) as usize];
+        }
 
         let new_game = Game {
             other: my,
             my: other,
             cards,
             table: self.card_curr,
+            hash,
         };
         Some(new_game)
     }
@@ -262,6 +270,7 @@ impl Iterator for GameBackIter<'_> {
             other: self.game.my,
             cards,
             table: self.card_curr,
+            hash: 0,
         };
         Some((prev_game, (1 << 24) >> self.to_curr))
     }

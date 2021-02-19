@@ -4,7 +4,7 @@ use std::{
 };
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct Eval(i8);
+pub struct Eval(pub i8);
 
 impl Display for Eval {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use agent::Agent;
 use connection::get_msg;
 use onitama_move_gen::tablebase::TableBase;
@@ -46,15 +48,25 @@ fn main() {
         }
     };
 
-    let agent = Agent::new(TableBase::new(state.all_cards()));
+    let mut agent = Agent::new(TableBase::new(state.all_cards()));
+    let mut depth = 0;
 
     'game: loop {
         if state.index() == create.index {
             let game = state.game();
-            let new_game = agent.search(game, 8);
+            let now = Instant::now();
+            let new_game = loop {
+                let new_game = agent.search(game, depth);
+                depth += 1;
+                if now.elapsed().as_millis() > 3000 || depth > 32 {
+                    break new_game;
+                }
+            };
+            println!("depth: {}", depth);
             let flip = state.current_turn == "red";
             let command = move_to_command(game, new_game, &create.match_id, &create.token, flip);
             ws.write_message(command.into()).unwrap();
+            depth = depth.saturating_sub(2);
         }
 
         state = loop {

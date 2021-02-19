@@ -8,7 +8,6 @@ extern crate build_const;
 extern crate bitintr;
 extern crate nudge;
 extern crate num_traits;
-extern crate typed_arena;
 
 pub mod eval;
 pub mod gen;

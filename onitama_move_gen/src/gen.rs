@@ -82,6 +82,11 @@ impl Game {
         false
     }
 
+    pub fn hash(&self) -> u16 {
+        let temp = self.my ^ self.other.swap_bytes();
+        (temp ^ temp.wrapping_shr(16) ^ self.cards ^ self.table) as u16
+    }
+
     pub fn is_loss(&self) -> bool {
         self.other.wrapping_shr(25) == 22 || self.my & 1 << self.my.wrapping_shr(25) == 0
     }

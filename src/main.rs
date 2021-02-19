@@ -8,6 +8,7 @@ use crate::messages::{move_to_command, LitamaMsg, StateMsg};
 mod agent;
 mod connection;
 mod messages;
+mod transpose;
 
 extern crate onitama_move_gen;
 #[macro_use]

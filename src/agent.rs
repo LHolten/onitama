@@ -2,13 +2,19 @@ use std::cmp::max;
 
 use onitama_move_gen::{eval::Eval, gen::Game, tablebase::TableBase};
 
+use crate::transpose::Transpose;
+
 pub struct Agent {
     table: TableBase,
+    transpose: Transpose,
 }
 
 impl Agent {
     pub fn new(table: TableBase) -> Self {
-        Self { table }
+        Self {
+            table,
+            transpose: Transpose::new(),
+        }
     }
 
     pub fn search(&self, game: Game, depth: usize) -> Game {
@@ -21,6 +27,9 @@ impl Agent {
             if score >= alpha {
                 alpha = score;
                 alpha_game = new_game;
+                if alpha == Eval::new_win(1) {
+                    break;
+                }
             }
             println!("score: {}", score);
         }
@@ -28,31 +37,34 @@ impl Agent {
     }
 
     fn alpha_beta(&self, game: Game, mut alpha: Eval, beta: Eval, depth_left: usize) -> Eval {
-        if game.is_loss() || alpha == Eval::new_win(1) {
-            return alpha;
+        assert!(alpha < beta);
+        if game.is_loss() {
+            return Eval::new_loss(0);
         };
-        alpha = max(alpha, Eval::new_loss(1));
+        if Eval::new_loss(1) > alpha {
+            alpha = Eval::new_loss(1);
+            if alpha >= beta {
+                return Eval::new_win(1);
+            }
+        }
         if depth_left == 0 {
-            return self.quiesce(game, alpha, beta);
+            return self.eval(game);
         }
-        if beta == Eval::new_loss(0) {
-            return Eval::new_win(1);
-        }
-        assert!(beta != Eval::new_loss(0));
         for new_game in game.forward() {
             let score = self
                 .alpha_beta(new_game, beta.forward(), alpha.forward(), depth_left - 1)
                 .backward();
-            if score >= beta {
-                return Eval::new_win(1);
+            if score > alpha {
+                alpha = score;
+                if alpha >= beta {
+                    return Eval::new_win(1);
+                }
             }
-            alpha = max(score, alpha);
-            assert!(alpha != Eval::new_win(1));
         }
         alpha
     }
 
-    fn quiesce(&self, game: Game, alpha: Eval, beta: Eval) -> Eval {
+    fn eval(&self, game: Game) -> Eval {
         self.table.eval(game)
     }
 }

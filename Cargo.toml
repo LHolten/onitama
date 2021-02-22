@@ -4,6 +4,11 @@ version = "0.1.0"
 authors = ["Hytak <lhc.holten@gmail.com>"]
 edition = "2018"
 
+[profile.release]
+debug = true
+lto = "thin"
+codegen-units = 1
+
 [dependencies]
 onitama_move_gen = { path = "onitama_move_gen" }
 serde_json = "1.0"

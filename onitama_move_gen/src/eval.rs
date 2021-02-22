@@ -23,22 +23,26 @@ impl Debug for Eval {
 }
 
 impl Eval {
+    #[inline]
     pub fn new_win(steps: i8) -> Self {
         assert!((1..=i8::MAX).contains(&steps));
         Eval(-(i8::MIN + steps))
     }
 
+    #[inline]
     pub fn new_loss(steps: i8) -> Self {
         assert!((0..=i8::MAX).contains(&steps));
         Eval(i8::MIN + steps)
     }
 
+    #[inline]
     pub fn new_tie() -> Self {
         Eval(0)
     }
 
+    #[inline]
     pub fn backward(self) -> Self {
-        assert!(self.0 != -1);
+        debug_assert!(self.0 != -1);
         match self.0.cmp(&0) {
             Ordering::Less => Eval(-(self.0 + 1)),
             Ordering::Equal => Eval(0),
@@ -46,8 +50,9 @@ impl Eval {
         }
     }
 
+    #[inline]
     pub fn forward(self) -> Self {
-        assert!(self.0 != i8::MIN);
+        debug_assert!(self.0 != i8::MIN);
         match self.0.cmp(&0) {
             Ordering::Less => Eval(-self.0),
             Ordering::Equal => Eval(0),
@@ -55,6 +60,7 @@ impl Eval {
         }
     }
 
+    #[inline]
     pub fn plies(self) -> u8 {
         match self.0.cmp(&0) {
             Ordering::Less => (self.0 - i8::MIN) as u8 * 2,

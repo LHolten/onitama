@@ -61,6 +61,7 @@ impl Game {
         total
     }
 
+    #[inline]
     pub fn is_win(&self) -> bool {
         for from in self.next_my() {
             let both = unsafe {
@@ -83,32 +84,44 @@ impl Game {
         false
     }
 
+    #[inline]
+    pub fn count_pieces(&self) -> usize {
+        ((self.my & PIECE_MASK).popcnt() + (self.other & PIECE_MASK).popcnt()) as usize
+    }
+
+    #[inline]
     pub fn is_loss(&self) -> bool {
         self.other.wrapping_shr(25) == 22 || self.my & 1 << self.my.wrapping_shr(25) == 0
     }
 
+    #[inline]
     pub fn is_other_loss(&self) -> bool {
         self.my.wrapping_shr(25) == 22 || self.other & 1 << self.other.wrapping_shr(25) == 0
     }
 
+    #[inline]
     fn next_my(&self) -> BitIter {
         unsafe { assume(self.my & PIECE_MASK != 0) }
         BitIter(self.my & PIECE_MASK)
     }
 
+    #[inline]
     pub fn next_other(&self) -> BitIter {
         unsafe { assume(self.other & PIECE_MASK != 0) }
         BitIter(self.other & PIECE_MASK)
     }
 
+    #[inline]
     fn next_my_card(&self) -> CardIter {
         CardIter::new(self.cards)
     }
 
+    #[inline]
     fn next_other_card(&self) -> CardIter {
         CardIter::new(self.cards.wrapping_shr(16))
     }
 
+    #[inline]
     fn next_to(&self, from: u32, card: u32) -> BitIter {
         let &shifted = unsafe {
             SHIFTED
@@ -118,6 +131,7 @@ impl Game {
         BitIter(self.my.andn(shifted))
     }
 
+    #[inline]
     fn next_from(&self, to: u32, card: u32) -> BitIter {
         let &shifted = unsafe {
             SHIFTED_R
@@ -131,6 +145,7 @@ impl Game {
         BitIter(my_rev.andn(self.other.andn(shifted)))
     }
 
+    #[inline]
     pub fn forward(&self) -> GameIter {
         let mut from = self.next_my();
         let from_curr = from.next().unwrap();
@@ -147,6 +162,7 @@ impl Game {
         }
     }
 
+    #[inline]
     pub fn backward(&self) -> GameBackIter {
         let mut to = self.next_other();
         let to_curr = to.next().unwrap();
@@ -176,7 +192,7 @@ pub struct GameIter<'a> {
 impl Iterator for GameIter<'_> {
     type Item = Game;
 
-    #[inline(always)]
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         let mut to_new = self.to.next();
         while to_new.is_none() {
@@ -194,26 +210,39 @@ impl Iterator for GameIter<'_> {
 
         let my_king = self.game.my.wrapping_shr(25);
 
+        let mut hash = self.game.hash;
+
         let to_other = 1 << 24 >> to_curr;
         let other = to_other.andn(self.game.other);
 
-        let mut hash = self.game.hash;
-
         let my_cards = self.game.cards ^ 1 << self.card_curr ^ 1 << self.game.table;
-        hash ^= CARD_HASH[self.card_curr as usize] ^ CARD_HASH[self.game.table as usize];
         let cards = my_cards.wrapping_shl(16) | my_cards.wrapping_shr(16);
+        unsafe {
+            debug_assert!(self.card_curr < 16 && self.game.table < 16);
+            hash ^= CARD_HASH.get_unchecked(self.card_curr as usize);
+            hash ^= CARD_HASH.get_unchecked(self.game.table as usize);
+        }
 
         let mut my = self.game.my ^ (1 << self.from_curr) ^ (1 << to_curr);
-        hash ^= PIECE_HASH[self.from_curr as usize] ^ PIECE_HASH[to_curr as usize];
+        unsafe {
+            debug_assert!(self.from_curr < 25 && to_curr < 25);
+            hash ^= PIECE_HASH.get_unchecked(self.from_curr as usize);
+            hash ^= PIECE_HASH.get_unchecked(to_curr as usize);
+        }
 
         if self.from_curr == my_king {
             my = my & PIECE_MASK | to_curr << 25;
-            hash ^= KING_HASH[self.from_curr as usize] ^ KING_HASH[to_curr as usize];
+            unsafe {
+                hash ^= KING_HASH.get_unchecked(self.from_curr as usize);
+                hash ^= KING_HASH.get_unchecked(to_curr as usize);
+            }
         };
 
         hash = hash.swap_bytes();
         if self.game.other & to_other != 0 {
-            hash ^= PIECE_HASH[(24 - to_curr) as usize];
+            unsafe {
+                hash ^= PIECE_HASH.get_unchecked((24 - to_curr) as usize);
+            }
         }
 
         let new_game = Game {
@@ -239,7 +268,7 @@ pub struct GameBackIter<'a> {
 impl Iterator for GameBackIter<'_> {
     type Item = (Game, u32); // (no)take
 
-    // #[inline(always)]
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         let mut from_new = self.from.next();
         while from_new.is_none() {

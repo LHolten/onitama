@@ -6,6 +6,7 @@ pub struct BitIter(pub u32);
 impl Iterator for BitIter {
     type Item = u32;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.0 != 0 {
             unsafe { assume(self.0.blsi() == 1 << self.0.tzcnt()) }
@@ -24,6 +25,7 @@ pub struct CardIter {
 }
 
 impl CardIter {
+    #[inline]
     pub fn new(mut value: u32) -> Self {
         let card1 = Some(value.tzcnt());
         unsafe { assume(value != 0) }
@@ -36,6 +38,7 @@ impl CardIter {
 impl Iterator for CardIter {
     type Item = u32;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         let val = self.card1;
         self.card1 = self.card2;

@@ -42,21 +42,21 @@ impl Eval {
 
     #[inline]
     pub fn backward(self) -> Self {
-        debug_assert!(self.0 != -1);
-        match self.0.cmp(&0) {
-            Ordering::Less => Eval(-(self.0 + 1)),
-            Ordering::Equal => Eval(0),
-            Ordering::Greater => Eval(-self.0),
+        // debug_assert!(self.0 != -1);
+        if self < Eval::new_tie() {
+            Eval(-(self.0 + 1))
+        } else {
+            Eval(-self.0)
         }
     }
 
     #[inline]
     pub fn forward(self) -> Self {
         debug_assert!(self.0 != i8::MIN);
-        match self.0.cmp(&0) {
-            Ordering::Less => Eval(-self.0),
-            Ordering::Equal => Eval(0),
-            Ordering::Greater => Eval((-self.0) - 1),
+        if self < Eval::new_tie() {
+            Eval(-self.0)
+        } else {
+            Eval((-self.0) - 1)
         }
     }
 
@@ -68,6 +68,28 @@ impl Eval {
             Ordering::Greater => ((-self.0) - i8::MIN) as u8 * 2 - 1,
         }
     }
+
+    // #[inline]
+    // pub fn negate(self) -> Eval {
+    //     debug_assert!(self.0 != i8::MIN);
+    //     Eval(self.0.wrapping_neg())
+    // }
+
+    // #[inline]
+    // pub fn minus(self) -> Eval {
+    //     debug_assert!(self.0 != i8::MIN);
+    //     debug_assert!(self.0 != i8::MIN + 1);
+    //     Eval(self.0 - 1)
+    // }
+
+    // #[inline]
+    // pub fn test(self, other: Self) -> bool {
+    //     if self < Eval::new_tie() {
+    //         self <= other
+    //     } else {
+    //         self < other
+    //     }
+    // }
 }
 
 #[cfg(test)]
@@ -117,4 +139,9 @@ mod tests {
             assert_eq!(Eval(i).forward().backward(), Eval(i))
         }
     }
+
+    // #[test]
+    // fn test_test() {
+    //     assert!(Eval(-1).test())
+    // }
 }

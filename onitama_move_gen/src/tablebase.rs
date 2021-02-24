@@ -14,15 +14,19 @@ use crate::{
 };
 
 type TableData = [[[[[Eval; 26]; 26]; 25]; 25]; 30];
-pub struct TableBase(Box<TableData>, Vec<Game>);
+pub struct TableBase(TableData);
 
 impl TableBase {
-    pub fn new(cards: [u32; 5]) -> Self {
-        let val = unsafe {
-            let layout = Layout::new::<TableData>();
-            Box::from_raw(alloc_zeroed(layout) as *mut TableData)
-        };
-        let mut table = TableBase(val, Vec::new());
+    pub fn empty() -> Box<Self> {
+        unsafe {
+            let layout = Layout::new::<TableBase>();
+            Box::from_raw(alloc_zeroed(layout) as *mut TableBase)
+        }
+    }
+
+    pub fn new(cards: [u32; 5]) -> Box<Self> {
+        let mut table = Self::empty();
+        let mut queue = Vec::new();
         let cards = card_config(cards);
 
         for other_king in 0..25 {
@@ -45,12 +49,12 @@ impl TableBase {
                         table[game] = Eval::new_loss(0);
                         for (mut prev_game, take) in game.backward() {
                             if !prev_game.is_other_loss() {
-                                table.check_win(prev_game, Eval::new_win(1));
+                                table.check_win(&mut queue, prev_game, Eval::new_win(1));
                             }
                             if (prev_game.other & PIECE_MASK).popcnt() < 2 {
                                 prev_game.other |= take;
                                 if !prev_game.is_other_loss() {
-                                    table.check_win(prev_game, Eval::new_win(1));
+                                    table.check_win(&mut queue, prev_game, Eval::new_win(1));
                                 }
                             }
                         }
@@ -60,9 +64,9 @@ impl TableBase {
             dbg!("done");
         }
 
-        while !table.1.is_empty() {
-            dbg!(table.1.len());
-            for game in take(&mut table.1) {
+        while !queue.is_empty() {
+            dbg!(queue.len());
+            for game in take(&mut queue) {
                 if table[game] != Eval::new_loss(0) {
                     continue;
                 }
@@ -82,10 +86,10 @@ impl TableBase {
                 if eval < Eval::new_tie() {
                     let prev_eval = eval.backward();
                     for (mut prev_game, take) in game.backward() {
-                        table.check_win(prev_game, prev_eval);
+                        table.check_win(&mut queue, prev_game, prev_eval);
                         if (prev_game.other & PIECE_MASK).popcnt() < 2 {
                             prev_game.other |= take;
-                            table.check_win(prev_game, prev_eval);
+                            table.check_win(&mut queue, prev_game, prev_eval);
                         }
                     }
                 }
@@ -95,30 +99,30 @@ impl TableBase {
         table
     }
 
-    fn check_win(&mut self, game: Game, eval: Eval) {
+    fn check_win(&mut self, queue: &mut Vec<Game>, game: Game, eval: Eval) {
         debug_assert!(eval > Eval::new_tie());
         if eval > self[game] {
             self[game] = eval;
             let prev_eval = eval.backward();
             for (mut prev_game, take) in game.backward() {
-                self.check_loss(prev_game, prev_eval);
+                self.check_loss(queue, prev_game, prev_eval);
                 if (prev_game.other & PIECE_MASK).popcnt() < 2 {
                     prev_game.other |= take;
-                    self.check_loss(prev_game, prev_eval);
+                    self.check_loss(queue, prev_game, prev_eval);
                 }
             }
         }
     }
 
-    fn check_loss(&mut self, game: Game, eval: Eval) {
+    fn check_loss(&mut self, queue: &mut Vec<Game>, game: Game, eval: Eval) {
         if eval < self[game] && self[game] <= Eval::new_tie() {
             self[game] = Eval::new_loss(0);
-            self.1.push(game)
+            queue.push(game)
         }
     }
 
     #[inline]
-    pub fn eval(&self, game: Game) -> Eval {
+    pub fn eval(&self, game: Game) -> (bool, i8) {
         let my_king = game.my.wrapping_shr(25);
         let mut my = game.my & PIECE_MASK ^ 1 << my_king;
         if my == 0 {
@@ -131,6 +135,7 @@ impl TableBase {
         }
 
         let diff = my.popcnt() as i8 - other.popcnt() as i8;
+        let done = my.popcnt() == 1 && other.popcnt() == 1;
 
         // let m = BitIter(my).next().unwrap_or(25);
         // let o = BitIter(other).next().unwrap_or(25);
@@ -158,8 +163,21 @@ impl TableBase {
             }
             max_eval = max(max_eval, min_eval);
         }
-        // max_eval
-        Eval(max_eval.0.saturating_add(diff.saturating_mul(80)))
+        let eval = if done {
+            match max_eval.cmp(&Eval::new_tie()) {
+                std::cmp::Ordering::Less => -127,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 127,
+            }
+        } else {
+            min(
+                max(max_eval.0.saturating_add(diff.saturating_mul(80)), -126),
+                126,
+            )
+            // Eval(diff.saturating_mul(40))
+            // max_eval
+        };
+        (done, eval)
     }
 }
 

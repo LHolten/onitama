@@ -8,7 +8,7 @@ use crate::{CARD_HASH, KING_HASH, PIECE_HASH, SHIFTED, SHIFTED_L, SHIFTED_R, SHI
 
 pub const PIECE_MASK: u32 = (1 << 25) - 1;
 
-#[derive(Clone, Copy, PartialEq, Hash)]
+#[derive(Clone, Copy, PartialEq, Hash, Default)]
 pub struct Game {
     pub my: u32,
     pub other: u32,
@@ -86,7 +86,7 @@ impl Game {
 
     #[inline]
     pub fn count_pieces(&self) -> usize {
-        ((self.my & PIECE_MASK).popcnt() + (self.other & PIECE_MASK).popcnt()) as usize
+        (self.my & PIECE_MASK).popcnt() as usize
     }
 
     #[inline]

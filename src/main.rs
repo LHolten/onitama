@@ -1,16 +1,17 @@
-use std::{cmp::max, env, time::Instant};
+use std::{env, time::Instant};
 
-use agent::Agent;
-use connection::get_msg;
+use connection::{get_msg, get_next_state};
 use onitama_move_gen::tablebase::TableBase;
 use tungstenite::connect;
 
-use crate::messages::{move_to_command, LitamaMsg, StateMsg};
+use crate::{
+    messages::{move_to_command, LitamaMsg, StateMsg},
+    node::{Agent, Node},
+};
 
-pub mod agent;
 mod connection;
 mod messages;
-mod transpose;
+pub mod node;
 
 extern crate onitama_move_gen;
 #[macro_use]
@@ -18,6 +19,10 @@ extern crate serde_derive;
 extern crate tungstenite;
 
 fn main() {
+    run_loop();
+}
+
+fn run_loop() -> Option<()> {
     let mut ws = connect("ws://litama.herokuapp.com").unwrap().0;
 
     let args: Vec<String> = env::args().collect();
@@ -61,43 +66,41 @@ fn main() {
         }
     };
 
-    let now = Instant::now();
-    let mut agent = Agent::new(TableBase::new(state.all_cards()));
-    println!("tablebase took: {}", now.elapsed().as_secs_f32());
-    let mut depth = 0;
+    let now1 = Instant::now();
+    let mut agent = Agent(TableBase::new(state.all_cards()));
+    println!("tablebase took: {}", now1.elapsed().as_secs_f32());
 
-    'game: loop {
-        if state.index() == index {
-            let game = state.game();
-            depth = max(depth, game.count_pieces() as usize);
-            let now = Instant::now();
-            let new_game = loop {
-                let new_game = agent.search(game, depth);
-                depth += 1;
-                if now.elapsed().as_millis() > 1000 || depth > 22 {
-                    break new_game;
-                }
-            };
-            // println!("table: {}", agent.eval(game));
-            println!("depth: {}", depth - game.count_pieces() as usize);
-            let flip = state.current_turn == "red";
-            let command = move_to_command(game, new_game, &match_id, &token, flip);
-            ws.write_message(command.into()).unwrap();
-            depth = depth.saturating_sub(2);
-        }
+    if state.index() != index {
+        state = get_next_state(state, &mut ws)?;
+    }
+    let mut node = agent.new_node(state.game());
 
-        state = loop {
-            match get_msg(&mut ws) {
-                LitamaMsg::Move => {}
-                LitamaMsg::State(StateMsg::InProgress(new_state)) => {
-                    if state != new_state {
-                        break new_state;
-                    }
-                }
-                LitamaMsg::State(StateMsg::Ended) => break 'game,
-                LitamaMsg::Error(_) => {}
-                msg => panic!(format!("expected state/move message: {:?}", msg)),
+    loop {
+        let now2 = Instant::now();
+        loop {
+            agent.bns(&mut node);
+            if now2.elapsed().as_millis() > 1000 || node.depth > 20 {
+                break;
             }
-        };
+        }
+        // println!(
+        //     "{}, {}, {}, {}",
+        //     node.lower,
+        //     node.nodes[0].lower,
+        //     node.nodes[0].nodes[0].lower,
+        //     node.nodes[0].nodes[0].nodes[0].lower
+        // );
+        // println!("table: {}", agent.eval(game));
+        let flip = state.current_turn == "red";
+        node = node.nodes.unwrap().into_iter().next().unwrap();
+        let command = move_to_command(state.game(), node.game, &match_id, &token, flip);
+        ws.write_message(command.into()).unwrap();
+
+        // let lower = node.lower;
+        state = get_next_state(state, &mut ws)?;
+        state = get_next_state(state, &mut ws)?;
+        let cond = |n: &Node| n.game == state.game();
+        node = node.nodes.unwrap().into_iter().find(cond).unwrap();
+        // node.lower = lower;
     }
 }

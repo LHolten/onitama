@@ -37,24 +37,6 @@ fn shift(m: u32, pos: usize) -> u32 {
     shifted & MASK[pos % 5]
 }
 
-fn board_hash(seed: u64) -> [u32; 25] {
-    let mut res = [0; 25];
-    let rng = Rng::with_seed(seed);
-    for val in res.iter_mut() {
-        *val = rng.u32(0..=u32::MAX);
-    }
-    res
-}
-
-fn card_hash(seed: u64) -> [u32; 16] {
-    let mut res = [0; 16];
-    let rng = Rng::with_seed(seed);
-    for val in res.iter_mut() {
-        *val = rng.u32(0..=u32::MAX);
-    }
-    res
-}
-
 fn main() {
     let mut shifted = [[0; 25]; 16];
     let mut shifted_r = [[0; 25]; 16];
@@ -82,8 +64,5 @@ fn main() {
     consts.add_value("SHIFTED_L", "[[u64; 25]; 16]", shifted_l);
     consts.add_value("SHIFTED_U", "[[u64; 25]; 16]", shifted_u);
     consts.add_value("NAMES", "[&str; 16]", names);
-    consts.add_value("PIECE_HASH", "[u32; 25]", board_hash(2));
-    consts.add_value("KING_HASH", "[u32; 25]", board_hash(4));
-    consts.add_value("CARD_HASH", "[u32; 16]", card_hash(5));
     consts.finish();
 }

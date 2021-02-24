@@ -44,7 +44,6 @@ impl TableBase {
                             table: center,
                             my: 1 << my & PIECE_MASK | 1 << my_king & !full_other | my_king << 25,
                             other: 1 << other & PIECE_MASK | 1 << other_king | other_king << 25,
-                            hash: 0,
                         };
                         table[game] = Eval::new_loss(0);
                         for (mut prev_game, take) in game.backward() {
@@ -157,7 +156,6 @@ impl TableBase {
                     other: (1 << o) & PIECE_MASK | 1 << other_king | other_king << 25,
                     cards: game.cards,
                     table: game.table,
-                    hash: 0,
                 };
                 min_eval = min(min_eval, self[new_game])
             }

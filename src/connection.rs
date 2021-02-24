@@ -14,13 +14,14 @@ pub fn get_msg(ws: &mut WebSocket<AutoStream>) -> LitamaMsg {
     serde_json::from_str::<LitamaMsg>(&msg).unwrap()
 }
 
-pub fn get_next_state(state: StateObj, ws: &mut WebSocket<AutoStream>) -> Option<StateObj> {
+pub fn get_next_state(state: &mut StateObj, ws: &mut WebSocket<AutoStream>) -> Option<()> {
     loop {
         match get_msg(ws) {
             LitamaMsg::Move => {}
             LitamaMsg::State(StateMsg::InProgress(new_state)) => {
-                if state != new_state {
-                    break Some(new_state);
+                if state != &new_state {
+                    *state = new_state;
+                    break Some(());
                 }
             }
             LitamaMsg::State(StateMsg::Ended) => break None,

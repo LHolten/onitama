@@ -21,7 +21,6 @@ pub fn perft_test(depth: u8) -> u64 {
         other: 0b11111 | 2 << 25,
         cards: 0b00011 | 0b01100 << 16,
         table: 4,
-        hash: 0,
     };
 
     perft(TEST_GAME, depth)

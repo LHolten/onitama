@@ -2,7 +2,7 @@ use std::{env, mem::take, rc::Rc, time::Instant};
 
 use connection::{get_msg, get_next_state};
 use messages::StateObj;
-use onitama_move_gen::tablebase::TableBase;
+use onitama_move_gen::{gen::Game, tablebase::TableBase};
 use tungstenite::{client::AutoStream, connect, WebSocket};
 
 use crate::{
@@ -76,7 +76,7 @@ fn run_loop() -> Option<()> {
     }
 
     let mut agent = Agent::new(tablebase.clone());
-    let mut node = agent.new_node(state.game());
+    let mut node = agent.new_node(state.game(), 0);
 
     let mut runner = Runner {
         ws,
@@ -110,28 +110,37 @@ impl Runner {
     fn run<'a>(&mut self, agent: &'a Agent, node: &mut Node<'a>) -> Option<()> {
         let now2 = Instant::now();
         loop {
-            agent.bns(node);
-            if now2.elapsed().as_millis() > 1000 || node.depth > 20 {
+            let res = agent.bns(node);
+            println!("* {}", node.get_lower());
+            if now2.elapsed().as_millis() > 1000
+                || node.get_lower() == 127
+                || node.get_lower() == -127
+                || res.is_none()
+            {
                 break;
             }
         }
-        *node = take(node.nodes.as_mut().unwrap().iter_mut().next().unwrap());
+        *node = take(node.get_nodes().iter_mut().next().unwrap());
+
+        let game = self.state.game();
+        let cond = |(i, _): &(usize, Game)| node.is_child(*i as u8);
+        let (_, new_game) = game.forward().enumerate().find(cond).unwrap();
 
         let flip = self.state.current_turn == "red";
-        let command = move_to_command(
-            self.state.game(),
-            node.game,
-            &self.match_id,
-            &self.token,
-            flip,
-        );
+        let command = move_to_command(game, new_game, &self.match_id, &self.token, flip);
         self.ws.write_message(command.into()).unwrap();
 
         get_next_state(&mut self.state, &mut self.ws)?;
         get_next_state(&mut self.state, &mut self.ws)?;
-        let cond = |n: &&mut Node| n.game == self.state.game();
-        agent.expand(node);
-        *node = take(node.nodes.as_mut().unwrap().iter_mut().find(cond).unwrap());
+
+        if agent.expand(node).is_some() {
+            let cond = |(_, g): &(usize, Game)| g == &self.state.game();
+            let (i, _) = new_game.forward().enumerate().find(cond).unwrap();
+            let cond = |n: &&mut Node| n.is_child(i as u8);
+            *node = take(node.get_nodes().iter_mut().find(cond).unwrap())
+        } else {
+            *node = agent.new_node(self.state.game(), 0)
+        }
 
         Some(())
     }

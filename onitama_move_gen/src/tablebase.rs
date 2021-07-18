@@ -136,17 +136,6 @@ impl TableBase {
         let diff = my.popcnt() as i8 - other.popcnt() as i8;
         let done = my.popcnt() == 1 && other.popcnt() == 1;
 
-        // let m = BitIter(my).next().unwrap_or(25);
-        // let o = BitIter(other).next().unwrap_or(25);
-
-        // let new_game = Game {
-        // my: (1 << m) & PIECE_MASK | 1 << my_king | my_king << 25,
-        // other: (1 << o) & PIECE_MASK | 1 << other_king | other_king << 25,
-        //     cards: game.cards,
-        //     table: game.table,
-        // };
-        // self[new_game]
-
         let mut max_eval = Eval::new_loss(0);
         for m in BitIter(my) {
             let mut min_eval = Eval::new_win(1);
@@ -157,10 +146,17 @@ impl TableBase {
                     cards: game.cards,
                     table: game.table,
                 };
-                min_eval = min(min_eval, self[new_game])
+                let eval = self[new_game];
+                if eval >= Eval::new_tie() || o == 22 || other & 1 << 22 == 0 {
+                    min_eval = min(min_eval, self[new_game])
+                }
             }
-            max_eval = max(max_eval, min_eval);
+            if min_eval <= Eval::new_tie() || m == 22 || my & 1 << 22 == 0 {
+                max_eval = max(max_eval, min_eval);
+            }
         }
+
+        let done = done || max_eval.0 <= -127 || max_eval.0 == 127;
         let eval = if done {
             match max_eval.cmp(&Eval::new_tie()) {
                 std::cmp::Ordering::Less => -127,
@@ -168,10 +164,11 @@ impl TableBase {
                 std::cmp::Ordering::Greater => 127,
             }
         } else {
-            min(
-                max(max_eval.0.saturating_add(diff.saturating_mul(80)), -126),
-                126,
-            )
+            max_eval.0
+            // min(
+            //     max(max_eval.0.saturating_add(diff.saturating_mul(80)), -126),
+            //     126,
+            // )
             // Eval(diff.saturating_mul(40))
             // max_eval
         };

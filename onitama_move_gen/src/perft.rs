@@ -1,7 +1,7 @@
 use crate::gen::Game;
 
 #[inline(never)]
-fn perft(game: Game, depth: u8) -> u64 {
+fn perft(game: Game, depth: u8) -> usize {
     let mut total = 0;
     for new_game in game.forward() {
         if new_game.is_loss() {
@@ -15,7 +15,7 @@ fn perft(game: Game, depth: u8) -> u64 {
     total
 }
 
-pub fn perft_test(depth: u8) -> u64 {
+pub fn perft_test(depth: u8) -> usize {
     const TEST_GAME: Game = Game {
         my: 0b11111 | 2 << 25,
         other: 0b11111 | 2 << 25,

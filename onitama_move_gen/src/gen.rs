@@ -42,7 +42,7 @@ impl Debug for Game {
 
 impl Game {
     #[inline(always)]
-    pub fn count_moves(&self) -> u64 {
+    pub fn count_moves(&self) -> usize {
         let mut total = 0;
         for from in self.next_my() {
             let both = unsafe {
@@ -57,7 +57,7 @@ impl Game {
             let my = self.my as u64 | (self.my as u64) << 32;
             total += my.andn(both).popcnt();
         }
-        total
+        total as usize
     }
 
     #[inline]
@@ -152,7 +152,7 @@ impl Game {
         let card_curr = card.next().unwrap();
         let to = self.next_to(from_curr, card_curr);
         GameIter {
-            game: self,
+            game: *self,
             from,
             from_curr,
             card,
@@ -179,8 +179,8 @@ impl Game {
     }
 }
 
-pub struct GameIter<'a> {
-    game: &'a Game,
+pub struct GameIter {
+    game: Game,
     from: BitIter,
     from_curr: u32,
     card: CardIter,
@@ -188,7 +188,7 @@ pub struct GameIter<'a> {
     to: BitIter,
 }
 
-impl Iterator for GameIter<'_> {
+impl Iterator for GameIter {
     type Item = Game;
 
     #[inline]
@@ -231,9 +231,9 @@ impl Iterator for GameIter<'_> {
     }
 }
 
-impl ExactSizeIterator for GameIter<'_> {
+impl ExactSizeIterator for GameIter {
     fn len(&self) -> usize {
-        self.game.count_moves() as usize
+        self.game.count_moves()
     }
 }
 

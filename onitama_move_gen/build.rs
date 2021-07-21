@@ -1,7 +1,6 @@
 extern crate build_const;
 extern crate fastrand;
 use build_const::ConstWriter;
-use fastrand::Rng;
 
 #[allow(clippy::unusual_byte_groupings)]
 const CARDS: [(&str, u32, u8); 16] = [

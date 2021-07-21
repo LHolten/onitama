@@ -17,9 +17,9 @@ codegen-units = 1
 
 [dependencies]
 bitintr = "0.3.0"
-build_const = "0.2.1"
+build_const = "0.2.2"
 num-traits = "0.2.14"
-nudge = { version = "0.2.1", features = ["std", "nightly"] }
+nudge = { version = "0.2.1", features = ["nightly"] }
 
 [dev-dependencies]
 criterion = "0.3.3"

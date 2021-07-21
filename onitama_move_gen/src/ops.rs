@@ -1,4 +1,4 @@
-use bitintr::{Blsi, Blsr, Tzcnt};
+use bitintr::{Blsr, Tzcnt};
 use nudge::assume;
 
 pub struct BitIter(pub u32);
@@ -8,11 +8,21 @@ impl Iterator for BitIter {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
+        match self.peek() {
+            Some(val) => {
+                self.0 = self.0.blsr();
+                Some(val)
+            }
+            None => None,
+        }
+    }
+}
+
+impl BitIter {
+    #[inline]
+    pub fn peek(&self) -> Option<<Self as Iterator>::Item> {
         if self.0 != 0 {
-            unsafe { assume(self.0.blsi() == 1 << self.0.tzcnt()) }
-            let val = self.0.tzcnt();
-            self.0 = self.0.blsr();
-            Some(val)
+            Some(self.0.tzcnt())
         } else {
             None
         }
@@ -45,6 +55,18 @@ impl Iterator for CardIter {
         self.card2 = None;
         val
     }
+}
+
+pub fn cards_or(table: &[[u32; 25]; 16], cards: impl Iterator<Item = u32>, from: u32) -> u32 {
+    let mut total = 0;
+    for card in cards {
+        total |= unsafe {
+            table
+                .get_unchecked(card as usize)
+                .get_unchecked(from as usize)
+        };
+    }
+    total
 }
 
 // #[inline]

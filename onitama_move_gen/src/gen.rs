@@ -1,12 +1,14 @@
 use std::fmt::Debug;
+use std::iter::once;
 
 use bitintr::{Andn, Popcnt};
 use nudge::assume;
 
-use crate::ops::{BitIter, CardIter};
+use crate::ops::{cards_or, BitIter, CardIter};
 use crate::{SHIFTED, SHIFTED_L, SHIFTED_R, SHIFTED_U};
 
 pub const PIECE_MASK: u32 = (1 << 25) - 1;
+pub const TEMPLE: u32 = 22;
 
 #[derive(Clone, Copy, PartialEq, Hash, Default)]
 pub struct Game {
@@ -44,9 +46,9 @@ impl Game {
     #[inline(always)]
     pub fn count_moves(&self) -> usize {
         let mut total = 0;
-        for from in self.next_my() {
+        for from in self.piece_iter::<My>() {
+            let mut cards = self.card_iter::<My>();
             let both = unsafe {
-                let mut cards = self.next_my_card();
                 SHIFTED_L
                     .get_unchecked(cards.next().unwrap() as usize)
                     .get_unchecked(from as usize)
@@ -62,21 +64,15 @@ impl Game {
 
     #[inline]
     pub fn is_win(&self) -> bool {
-        for from in self.next_my() {
-            let both = unsafe {
-                let mut cards = self.next_my_card();
-                SHIFTED
-                    .get_unchecked(cards.next().unwrap() as usize)
-                    .get_unchecked(from as usize)
-                    | SHIFTED
-                        .get_unchecked(cards.next().unwrap() as usize)
-                        .get_unchecked(from as usize)
-            };
-            let other_king = 1 << 24 >> self.other.wrapping_shr(25);
+        for from in self.piece_iter::<My>() {
+            let cards = self.card_iter::<My>();
+            let both = cards_or(&SHIFTED, cards, from);
+            let other_king = 1 << 24 >> self.king::<Other>();
+
             if both & other_king != 0 {
                 return true;
             }
-            if from == self.my.wrapping_shr(25) && both & (1 << 22) != 0 {
+            if from == self.king::<My>() && both & (1 << TEMPLE) != 0 {
                 return true;
             }
         }
@@ -99,56 +95,40 @@ impl Game {
     }
 
     #[inline]
-    fn next_my(&self) -> BitIter {
-        unsafe { assume(self.my & PIECE_MASK != 0) }
-        BitIter(self.my & PIECE_MASK)
+    pub fn king<P: Player>(&self) -> u32 {
+        P::my_or_other(self.my, self.other).wrapping_shr(25)
     }
 
     #[inline]
-    pub fn next_other(&self) -> BitIter {
-        unsafe { assume(self.other & PIECE_MASK != 0) }
-        BitIter(self.other & PIECE_MASK)
+    pub fn piece_iter<P: Player>(&self) -> BitIter {
+        let pieces = P::my_or_other(self.my, self.other) & PIECE_MASK;
+        unsafe { assume(pieces != 0) }
+        BitIter(pieces)
     }
 
     #[inline]
-    fn next_my_card(&self) -> CardIter {
-        CardIter::new(self.cards)
-    }
-
-    #[inline]
-    fn next_other_card(&self) -> CardIter {
-        CardIter::new(self.cards.wrapping_shr(16))
+    pub fn card_iter<P: Player>(&self) -> CardIter {
+        CardIter::new(P::my_or_other(self.cards, self.cards.wrapping_shr(16)))
     }
 
     #[inline]
     fn next_to(&self, from: u32, card: u32) -> BitIter {
-        let &shifted = unsafe {
-            SHIFTED
-                .get_unchecked(card as usize)
-                .get_unchecked(from as usize)
-        };
+        let shifted = cards_or(&SHIFTED, once(card), from);
         BitIter(self.my.andn(shifted))
     }
 
     #[inline]
     fn next_from(&self, to: u32, card: u32) -> BitIter {
-        let &shifted = unsafe {
-            SHIFTED_R
-                .get_unchecked(card as usize)
-                .get_unchecked(to as usize)
-        };
-        let mut my_rev = self.my.reverse_bits() >> 7;
-        if to == self.other.wrapping_shr(25) {
-            my_rev |= 1 << 22
-        }
-        BitIter(my_rev.andn(self.other.andn(shifted)))
+        let shifted = cards_or(&SHIFTED_R, once(card), to);
+        let my_rev = self.my.reverse_bits() >> 7;
+        BitIter((my_rev | self.other).andn(shifted))
     }
 
     #[inline]
     pub fn forward(&self) -> GameIter {
-        let mut from = self.next_my();
+        let mut from = self.piece_iter::<My>();
         let from_curr = from.next().unwrap();
-        let mut card = self.next_my_card();
+        let mut card = self.card_iter::<My>();
         let card_curr = card.next().unwrap();
         let to = self.next_to(from_curr, card_curr);
         GameIter {
@@ -163,9 +143,9 @@ impl Game {
 
     #[inline]
     pub fn backward(&self) -> GameBackIter {
-        let mut to = self.next_other();
+        let mut to = self.piece_iter::<Other>();
         let to_curr = to.next().unwrap();
-        let mut card = self.next_other_card();
+        let mut card = self.card_iter::<Other>();
         let card_curr = card.next().unwrap();
         let from = self.next_from(to_curr, self.table);
         GameBackIter {
@@ -198,7 +178,7 @@ impl Iterator for GameIter {
             let mut card_new = self.card.next();
             if card_new.is_none() {
                 self.from_curr = self.from.next()?;
-                self.card = self.game.next_my_card();
+                self.card = self.game.card_iter::<My>();
                 card_new = self.card.next();
             }
             self.card_curr = card_new.unwrap();
@@ -256,7 +236,7 @@ impl Iterator for GameBackIter<'_> {
             let mut card_new = self.card.next();
             if card_new.is_none() {
                 self.to_curr = self.to.next()?;
-                self.card = self.game.next_other_card();
+                self.card = self.game.card_iter::<Other>();
                 card_new = self.card.next();
             }
             self.card_curr = card_new.unwrap();
@@ -265,13 +245,11 @@ impl Iterator for GameBackIter<'_> {
         }
         let from_curr = from_new.unwrap();
 
-        let other_king = self.game.other.wrapping_shr(25);
-
         let cards = self.game.cards.wrapping_shl(16) | self.game.cards.wrapping_shr(16);
         let cards = cards ^ 1 << self.card_curr ^ 1 << self.game.table;
         let mut other = self.game.other ^ (1 << self.to_curr) ^ (1 << from_curr);
 
-        if self.to_curr == other_king {
+        if self.to_curr == self.game.king::<Other>() {
             other = other & PIECE_MASK | from_curr << 25;
         };
 
@@ -282,5 +260,24 @@ impl Iterator for GameBackIter<'_> {
             table: self.card_curr,
         };
         Some((prev_game, (1 << 24) >> self.to_curr))
+    }
+}
+
+pub struct My;
+pub struct Other;
+
+pub trait Player {
+    fn my_or_other<T>(my: T, other: T) -> T;
+}
+
+impl Player for My {
+    fn my_or_other<T>(my: T, _other: T) -> T {
+        my
+    }
+}
+
+impl Player for Other {
+    fn my_or_other<T>(_my: T, other: T) -> T {
+        other
     }
 }

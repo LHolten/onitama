@@ -10,7 +10,7 @@ use crate::{SHIFTED, SHIFTED_L, SHIFTED_R, SHIFTED_U};
 pub const PIECE_MASK: u32 = (1 << 25) - 1;
 pub const TEMPLE: u32 = 22;
 
-#[derive(Clone, Copy, PartialEq, Hash, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Game {
     pub my: u32,
     pub other: u32,

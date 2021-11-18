@@ -1,123 +1,136 @@
-use std::{marker::PhantomData, ops::ControlFlow};
+use std::{hint::unreachable_unchecked, mem::swap, ops::BitXorAssign};
+
+use num::PrimInt;
+use seq_macro::seq;
 
 use crate::{
     for_each_iter::ForEachIter,
-    player::Player,
-    state::{Cards, State},
+    side::Side,
+    state::{get_bitmap, offset_pieces, single_mask, State},
 };
 
-#[derive(Clone, Copy)]
-struct BitIter(pub u32);
+#[derive(Clone, Copy, Default)]
+pub struct BitIter<T>(pub T);
 
-impl ForEachIter for BitIter {
-    type Item = u32;
+impl<T: PrimInt + BitXorAssign> ForEachIter for BitIter<T> {
+    type Item<'a> = u32;
 
+    // this implementation keeps values that were not succesfully processed
+    // which is not "correct", but it is conventient when nesting loops
     fn try_for_each<F, R>(&mut self, mut f: F) -> R
     where
         Self: Sized,
-        F: FnMut(Self::Item) -> R,
+        F: for<'a> FnMut(Self::Item<'a>) -> R,
         R: std::ops::Try<Output = ()>,
     {
-        while self.0 != 0 {
+        while self.0 != T::zero() {
             let index = self.0.trailing_zeros();
-            self.0 ^= 1 << index;
             f(index)?;
+            self.0 ^= T::one() << index as usize;
         }
         R::from_output(())
     }
 }
 
-impl BitIter {
-    fn try_for_each_recycle<F, R>(&mut self, mut f: F) -> R
+impl<S: Side> State<S> {
+    // second param is threats
+    fn go_all_pawns<F, R, const CARD: u32>(&mut self, mut f: F) -> R
     where
-        Self: Sized,
-        F: FnMut(u32) -> R,
+        F: for<'a> FnMut(&mut State<S::Other>) -> R,
         R: std::ops::Try<Output = ()>,
     {
-        match self.try_for_each(|index| f(index).branch().map_break(|r| (r, index))) {
-            ControlFlow::Break((r, index)) => {
-                self.0 ^= 1 << index; // add back index, we need it again
-                R::from_residual(r)
-            }
-            _ => R::from_output(()),
-        }
-    }
-}
-
-struct Forward<P> {
-    state: State,
-    cards: BitIter,
-    from: BitIter,
-    to: BitIter,
-    _player: PhantomData<P>,
-}
-
-impl<P: Player> Forward<P> {
-    pub fn new(state: State) -> Self {
-        Self {
-            state,
-            cards: if state.temple_is_attacked::<P>() {
-                BitIter(0) // if the temple is attacked then all moves are losing
-            } else {
-                BitIter(state.cards.get::<P>())
-            },
-            from: BitIter(0),
-            to: BitIter(0),
-            _player: PhantomData,
-        }
-    }
-}
-
-impl<P: Player> ForEachIter for Forward<P> {
-    type Item = State;
-
-    fn try_for_each<F, R>(&mut self, mut f: F) -> R
-    where
-        Self: Sized,
-        F: FnMut(Self::Item) -> R,
-        R: std::ops::Try<Output = ()>,
-    {
-        let mut virtual_call = |state: State| {
-            if state.king_is_attacked::<P>() {
-                R::from_output(()) // we ignore states that have an attacked king
-            } else {
-                f(state)
-            }
-        };
-
-        let king = self.state.pieces.king::<P>();
-        self.cards.try_for_each_recycle(|card| {
-            let mut state = self.state;
-            state.cards.swap::<P>(card); // can be reused for all moves with this card
-
-            reset(&mut self.from, || self.state.pieces.all::<P>());
-            if self.from.0 & (1 << king) != 0 {
-                reset(&mut self.to, || Cards::card::<P>(king, card));
-                self.to.try_for_each(|to| {
-                    let mut state = state;
-                    state.pieces.move_all::<P>(king, to);
-                    state.pieces.move_king::<P>(to);
-                    virtual_call(state)
-                })?;
-                self.from.0 ^= 1 << king; // we do not want to move the king again
-            }
-            self.from.try_for_each_recycle(|from| {
-                reset(&mut self.to, || Cards::card::<P>(from, card));
-                self.to.try_for_each(|to| {
-                    let mut state = state;
-                    state.pieces.move_all::<P>(from, to);
-                    virtual_call(state)
-                })
-            })
+        BitIter(get_bitmap::<S>(CARD)).try_for_each(|offset| {
+            let mut piece_mask = offset_pieces(self.my_pawns(), offset);
+            piece_mask &= !self.my_pawns() & !self.my_king();
+            BitIter(piece_mask).try_for_each(|to| self.go_pawn(to + 14 - offset, to, CARD, &mut f))
         })
     }
+
+    // all parameters are indices
+    fn go_pawn<F, R>(&mut self, from: u32, to: u32, mut card: u32, mut f: F) -> R
+    where
+        F: for<'a> FnMut(&mut State<S::Other>) -> R,
+        R: std::ops::Try<Output = ()>,
+    {
+        let opp_pawn_change = self.opp_pawns() & 1 << to;
+        let my_pawn_change = 1 << from | 1 << to;
+        let my_card_change = 1 << self.table | 1 << card;
+
+        *S::Other::get_mut(&mut self.pawns) ^= opp_pawn_change;
+        *S::get_mut(&mut self.pawns) ^= my_pawn_change;
+        *S::get_mut(&mut self.cards) ^= my_card_change;
+        swap(&mut self.table, &mut card);
+
+        let res = f(self.flip());
+
+        *S::Other::get_mut(&mut self.pawns) ^= opp_pawn_change;
+        *S::get_mut(&mut self.pawns) ^= my_pawn_change;
+        *S::get_mut(&mut self.cards) ^= my_card_change;
+        swap(&mut self.table, &mut card);
+
+        res
+    }
+
+    fn go_king<F, R>(&mut self, mut to: u32, mut card: u32, mut f: F) -> R
+    where
+        F: for<'a> FnMut(&mut State<S::Other>) -> R,
+        R: std::ops::Try<Output = ()>,
+    {
+        let opp_pawn_change = self.opp_pawns() & 1 << to;
+
+        *S::Other::get_mut(&mut self.pawns) ^= opp_pawn_change;
+        swap(S::get_mut(&mut self.kings), &mut to);
+        swap(&mut self.table, &mut card);
+
+        let res = f(self.flip());
+
+        *S::Other::get_mut(&mut self.pawns) ^= opp_pawn_change;
+        swap(S::get_mut(&mut self.kings), &mut to);
+        swap(&mut self.table, &mut card);
+
+        res
+    }
 }
 
-fn reset<F>(iter: &mut BitIter, f: F)
-where
-    F: FnOnce() -> u32,
-{
-    if iter.0 == 0 {
-        *iter = BitIter(f())
+// we do not care about resuming!
+impl<S: Side> ForEachIter for State<S> {
+    type Item<'a> = &'a mut State<S::Other>;
+
+    // this assumes it is not a win in 1
+    fn try_for_each<F, R>(&mut self, mut f: F) -> R
+    where
+        F: for<'a> FnMut(Self::Item<'a>) -> R,
+        R: std::ops::Try<Output = ()>,
+    {
+        if self.temple_threatened() {
+            // this is not a win in one, so it is impossible to take the king
+            return R::from_output(());
+        }
+
+        let threats = self.king_threats();
+        self.my_cards().try_for_each(|card| {
+            let mut king_mask = single_mask::<S>(card, self.my_king());
+            king_mask &= !self.my_pawns() & !self.opp_attack();
+            BitIter(king_mask).try_for_each(|to| self.go_king(to, card, &mut f))?;
+
+            match threats.count_ones() {
+                0 => {
+                    seq!(C in 0..16 {
+                        match card {
+                            #(C => self.go_all_pawns::<_, R, C>(&mut f)?,)*
+                            _ => unsafe { unreachable_unchecked() }
+                        }
+                    })
+                }
+                1 => self
+                    .from_which_pawns(threats, card)
+                    .try_for_each(|from| self.go_pawn(from, threats, card, &mut f))?,
+                2.. => {}
+            }
+
+            R::from_output(())
+        })?;
+
+        R::from_output(())
     }
 }

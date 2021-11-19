@@ -9,6 +9,7 @@ fn perft<S: Side>(state: &mut State<S>, depth: u8) -> usize {
     let mut total = 0;
     state.for_each(|new_state| {
         if depth == 1 {
+            // dbg!(new_state);
             total += 1;
         } else {
             total += perft(new_state, depth - 1)
@@ -25,6 +26,8 @@ pub fn perft_test(depth: u8) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    extern crate test;
+    use test::Bencher;
 
     #[test]
     fn test_perft() {
@@ -34,5 +37,12 @@ mod tests {
         assert_eq!(perft_test(4), 12388);
         assert_eq!(perft_test(5), 144384);
         assert_eq!(perft_test(6), 1432826);
+    }
+
+    #[bench]
+    fn bench_perft(b: &mut Bencher) {
+        b.iter(|| {
+            assert_eq!(perft_test(6), 1432826);
+        })
     }
 }

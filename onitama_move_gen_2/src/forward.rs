@@ -34,17 +34,35 @@ impl<T: PrimInt + BitXorAssign> ForEachIter for BitIter<T> {
 }
 
 impl<S: Side> State<S> {
-    // second param is threats
-    fn go_all_pawns<F, R, const CARD: u32>(&mut self, mut f: F) -> R
+    #[inline]
+    fn go_all_pawns<F, R>(&mut self, card: u32, mut f: F) -> R
     where
         F: for<'a> FnMut(&mut State<S::Other>) -> R,
         R: std::ops::Try<Output = ()>,
     {
-        BitIter(get_bitmap::<S>(CARD)).try_for_each(|offset| {
-            let mut piece_mask = offset_pieces(self.my_pawns(), offset);
-            piece_mask &= !self.my_pawns() & !(1 << self.my_king());
-            BitIter(piece_mask).try_for_each(|to| self.go_pawn(to + 14 - offset, to, CARD, &mut f))
-        })
+        impl<S: Side> State<S> {
+            #[inline]
+            fn inner<F, R, const CARD: u32>(&mut self, mut f: F) -> R
+            where
+                F: for<'a> FnMut(&mut State<S::Other>) -> R,
+                R: std::ops::Try<Output = ()>,
+            {
+                BitIter(get_bitmap::<S>(CARD)).try_for_each(|offset| {
+                    let mut piece_mask = offset_pieces(self.my_pawns(), offset);
+                    piece_mask &= !self.my_pawns() & !(1 << self.my_king());
+                    BitIter(piece_mask)
+                        .try_for_each(|to| self.go_pawn(to + 14 - offset, to, CARD, &mut f))
+                })
+            }
+        }
+
+        seq!(C in 0..16 {
+            match card {
+                #(C => self.inner::<_, R, C>(&mut f)?,)*
+                _ => unsafe { unreachable_unchecked() }
+            }
+        });
+        R::from_output(())
     }
 
     // all parameters are indices
@@ -115,14 +133,7 @@ impl<S: Side> ForEachIter for State<S> {
             BitIter(king_mask).try_for_each(|to| self.go_king(to, card, &mut f))?;
 
             match threats.count_ones() {
-                0 => {
-                    seq!(C in 0..16 {
-                        match card {
-                            #(C => self.go_all_pawns::<_, R, C>(&mut f)?,)*
-                            _ => unsafe { unreachable_unchecked() }
-                        }
-                    })
-                }
+                0 => self.go_all_pawns(card, &mut f)?,
                 1 => self
                     .from_which_pawns(threats.trailing_zeros(), card)
                     .try_for_each(|from| {
@@ -132,8 +143,6 @@ impl<S: Side> ForEachIter for State<S> {
             }
 
             R::from_output(())
-        })?;
-
-        R::from_output(())
+        })
     }
 }

@@ -3,7 +3,7 @@ use std::{marker::PhantomData, ops::BitOr};
 
 use crate::{
     card::{all_mask, single_mask},
-    for_each_iter::{ForEachIter, ForEachIterNewType},
+    for_each_iter::ForEachIter,
     forward::BitIter,
     side::Side,
 };
@@ -37,12 +37,13 @@ impl<S: Side> State<S> {
         BitIter(S::get(self.cards))
     }
 
-    pub fn opp_cards(&self) -> ForEachIterNewType<BitIter<u16>> {
-        BitIter(S::Other::get(self.cards)).std_iter()
+    pub fn opp_cards(&self) -> BitIter<u16> {
+        BitIter(S::Other::get(self.cards))
     }
 
     pub fn opp_attack(&self) -> u32 {
         let opp_all = self.opp_pawns() | 1 << self.opp_king();
+
         self.opp_cards()
             .map(|card| all_mask::<S::Other>(opp_all, card))
             .fold(0, BitOr::bitor)

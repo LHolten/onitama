@@ -3,8 +3,8 @@ use std::ops::ControlFlow;
 pub trait ForEachIter {
     type Item<'a>;
 
-    #[inline(always)]
-    fn for_each<F>(mut self, mut f: F)
+    #[inline]
+    fn for_each<F>(&mut self, mut f: F)
     where
         Self: Sized,
         F: for<'a> FnMut(Self::Item<'a>),
@@ -17,12 +17,11 @@ pub trait ForEachIter {
 
     fn try_for_each<F, R>(&mut self, f: F) -> R
     where
-        Self: Sized,
         F: for<'a> FnMut(Self::Item<'a>) -> R,
         R: std::ops::Try<Output = ()>;
 
-    #[inline(always)]
-    fn fold<B, F>(self, init: B, mut f: F) -> B
+    #[inline]
+    fn fold<B, F>(&mut self, init: B, mut f: F) -> B
     where
         Self: Sized,
         F: for<'a> FnMut(B, Self::Item<'a>) -> B,
@@ -34,10 +33,9 @@ pub trait ForEachIter {
         accum.unwrap()
     }
 
-    #[inline(always)]
+    #[inline]
     fn try_fold<B, F, R>(&mut self, init: B, mut f: F) -> R
     where
-        Self: Sized,
         F: for<'a> FnMut(B, Self::Item<'a>) -> R,
         R: std::ops::Try<Output = B>,
     {
@@ -51,11 +49,48 @@ pub trait ForEachIter {
         }
     }
 
+    #[inline]
+    fn map<F>(self, f: F) -> Map<Self, F>
+    where
+        Self: Sized,
+        F: for<'a> FnMut<(Self::Item<'a>,)>,
+    {
+        Map { iter: self, f }
+    }
+
+    #[inline]
     fn std_iter(self) -> ForEachIterNewType<Self>
     where
         Self: Sized,
     {
         ForEachIterNewType(self)
+    }
+}
+
+pub struct Map<I, F>
+where
+    I: ForEachIter,
+    F: for<'a> FnMut<(I::Item<'a>,)>,
+{
+    iter: I,
+    f: F,
+}
+
+impl<I, F> ForEachIter for Map<I, F>
+where
+    I: ForEachIter,
+    F: for<'a> FnMut<(I::Item<'a>,)>,
+{
+    type Item<'a> = <F as FnOnce<(I::Item<'a>,)>>::Output;
+
+    #[inline]
+    fn try_for_each<G, R>(&mut self, mut f: G) -> R
+    where
+        Self: Sized,
+        G: for<'a> FnMut(Self::Item<'a>) -> R,
+        R: std::ops::Try<Output = ()>,
+    {
+        self.iter.try_for_each(|v| f((self.f)(v)))
     }
 }
 
@@ -74,7 +109,7 @@ where
     }
 
     #[inline(always)]
-    fn for_each<F>(self, f: F)
+    fn for_each<F>(mut self, f: F)
     where
         Self: Sized,
         F: FnMut(Self::Item),
@@ -93,7 +128,7 @@ where
     }
 
     #[inline(always)]
-    fn fold<B, F>(self, init: B, f: F) -> B
+    fn fold<B, F>(mut self, init: B, f: F) -> B
     where
         Self: Sized,
         F: FnMut(B, Self::Item) -> B,
@@ -109,5 +144,18 @@ where
         R: std::ops::Try<Output = B>,
     {
         self.0.try_fold(init, f)
+    }
+}
+
+mod tests {
+    use super::ForEachIter;
+    use crate::{side::Left, state::State};
+
+    #[test]
+    pub fn test() {
+        let id: for<'a> fn(&'a mut _) -> &'a mut _ = |x| x;
+        State::<Left>::default().map(id).for_each(|s| {
+            dbg!(s);
+        })
     }
 }

@@ -34,6 +34,6 @@ impl Side for Right {
     }
 
     fn temple() -> u32 {
-        1 << 14
+        1 << 12
     }
 }

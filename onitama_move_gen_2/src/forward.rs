@@ -4,9 +4,10 @@ use num::PrimInt;
 use seq_macro::seq;
 
 use crate::{
+    card::{get_bitmap, offset_pieces, single_mask},
     for_each_iter::ForEachIter,
     side::Side,
-    state::{get_bitmap, offset_pieces, single_mask, State},
+    state::State,
 };
 
 #[derive(Clone, Copy, Default)]
@@ -41,7 +42,7 @@ impl<S: Side> State<S> {
     {
         BitIter(get_bitmap::<S>(CARD)).try_for_each(|offset| {
             let mut piece_mask = offset_pieces(self.my_pawns(), offset);
-            piece_mask &= !self.my_pawns() & !self.my_king();
+            piece_mask &= !self.my_pawns() & !(1 << self.my_king());
             BitIter(piece_mask).try_for_each(|to| self.go_pawn(to + 14 - offset, to, CARD, &mut f))
         })
     }
@@ -123,8 +124,10 @@ impl<S: Side> ForEachIter for State<S> {
                     })
                 }
                 1 => self
-                    .from_which_pawns(threats, card)
-                    .try_for_each(|from| self.go_pawn(from, threats, card, &mut f))?,
+                    .from_which_pawns(threats.trailing_zeros(), card)
+                    .try_for_each(|from| {
+                        self.go_pawn(from, threats.trailing_zeros(), card, &mut f)
+                    })?,
                 2.. => {}
             }
 

@@ -63,6 +63,11 @@ impl<S: Side> State<S> {
             }
         });
         R::from_output(())
+        // BitIter(get_bitmap::<S>(card)).try_for_each(|offset| {
+        //     let mut piece_mask = offset_pieces(self.my_pawns(), offset);
+        //     piece_mask &= !self.my_pawns() & !(1 << self.my_king());
+        //     BitIter(piece_mask).try_for_each(|to| self.go_pawn(to + 14 - offset, to, card, &mut f))
+        // })
     }
 
     // all parameters are indices
@@ -72,18 +77,17 @@ impl<S: Side> State<S> {
         R: std::ops::Try<Output = ()>,
     {
         let opp_pawn_change = self.opp_pawns() & 1 << to;
-        let my_pawn_change = 1 << from | 1 << to;
         let my_card_change = 1 << self.table | 1 << card;
 
         *S::Other::get_mut(&mut self.pawns) ^= opp_pawn_change;
-        *S::get_mut(&mut self.pawns) ^= my_pawn_change;
+        *S::get_mut(&mut self.pawns) ^= 1 << from | 1 << to;
         *S::get_mut(&mut self.cards) ^= my_card_change;
         swap(&mut self.table, &mut card);
 
         let res = f(self.flip());
 
         *S::Other::get_mut(&mut self.pawns) ^= opp_pawn_change;
-        *S::get_mut(&mut self.pawns) ^= my_pawn_change;
+        *S::get_mut(&mut self.pawns) ^= 1 << from | 1 << to;
         *S::get_mut(&mut self.cards) ^= my_card_change;
         swap(&mut self.table, &mut card);
 
@@ -116,6 +120,7 @@ impl<S: Side> ForEachIter for State<S> {
     type Item<'a> = &'a mut State<S::Other>;
 
     // this assumes it is not a win in 1
+    #[inline]
     fn try_for_each<F, R>(&mut self, mut f: F) -> R
     where
         F: for<'a> FnMut(Self::Item<'a>) -> R,

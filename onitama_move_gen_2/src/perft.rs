@@ -18,6 +18,7 @@ fn perft<S: Side>(state: &mut State<S>, depth: u8) -> usize {
     total
 }
 
+#[inline(never)]
 pub fn perft_test(depth: u8) -> usize {
     let mut state = State::<Left>::default();
     perft(&mut state, depth)

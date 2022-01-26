@@ -27,6 +27,7 @@ where
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{side::Left, state::State};

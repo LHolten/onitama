@@ -1,4 +1,7 @@
-use std::ops::{Deref, DerefMut};
+use std::{
+    mem::replace,
+    ops::{ControlFlow, Deref, DerefMut},
+};
 
 use crate::for_each_iter::ForEachIter;
 
@@ -26,8 +29,7 @@ where
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        // also try_for_each might not remove items on break so this is impossible to implement
-        unimplemented!("please use one of the specialised iterator methods")
+        self.try_for_each(ControlFlow::Break).break_value()
     }
 
     #[inline(always)]
@@ -40,13 +42,14 @@ where
     }
 
     #[inline(always)]
-    fn try_for_each<F, R>(&mut self, f: F) -> R
+    fn try_for_each<F, R>(&mut self, mut f: F) -> R
     where
         Self: Sized,
         F: FnMut(Self::Item) -> R,
         R: std::ops::Try<Output = ()>,
     {
-        self.0.try_for_each(f)
+        let mut tmp = R::from_output(());
+        self.0.try_for_each(|x| replace(&mut tmp, f(x)))
     }
 
     #[inline(always)]
@@ -59,12 +62,19 @@ where
     }
 
     #[inline(always)]
-    fn try_fold<B, F, R>(&mut self, init: B, f: F) -> R
+    fn try_fold<B, F, R>(&mut self, init: B, mut f: F) -> R
     where
         Self: Sized,
         F: FnMut(B, Self::Item) -> R,
         R: std::ops::Try<Output = B>,
     {
-        self.0.try_fold(init, f)
+        let mut accum = Some(init);
+        match self.try_for_each(|x| {
+            accum = Some(f(accum.take().unwrap(), x).branch()?);
+            ControlFlow::Continue(())
+        }) {
+            ControlFlow::Break(r) => R::from_residual(r),
+            _ => R::from_output(accum.unwrap()),
+        }
     }
 }

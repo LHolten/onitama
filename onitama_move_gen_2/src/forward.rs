@@ -63,11 +63,6 @@ impl<S: Side> State<S> {
             }
         });
         R::from_output(())
-        // BitIter(get_bitmap::<S>(card)).try_for_each(|offset| {
-        //     let mut piece_mask = offset_pieces(self.my_pawns(), offset);
-        //     piece_mask &= !self.my_pawns() & !(1 << self.my_king());
-        //     BitIter(piece_mask).try_for_each(|to| self.go_pawn(to + 14 - offset, to, card, &mut f))
-        // })
     }
 
     // all parameters are indices

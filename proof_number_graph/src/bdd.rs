@@ -3,17 +3,18 @@ use std::{
     collections::HashMap,
     fmt::Debug,
     hash::Hash,
+    mem::replace,
     ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Deref, Not},
     ptr,
     rc::Rc,
 };
 
 pub type Op = fn(bool, bool) -> bool;
-pub type Choice = fn(usize) -> bool;
 
 pub struct RcStore<S, T> {
     unique: HashMap<T, Bdd<T>>,
     compute: HashMap<[Bdd<T>; 2], Bdd<T>>,
+    count: HashMap<Bdd<T>, usize>,
     next: S,
 }
 
@@ -22,6 +23,7 @@ impl<S: Default, T> Default for RcStore<S, T> {
         Self {
             unique: Default::default(),
             compute: Default::default(),
+            count: Default::default(),
             next: Default::default(),
         }
     }
@@ -50,23 +52,15 @@ impl<S: Store<T>, T: DecisionDiagram, const N: usize> Store<Bdd<[T; N]>> for RcS
         self.compute.try_insert(args, rc).unwrap().clone()
     }
 
-    fn set(&mut self, arg: Bdd<[T; N]>, index: usize, choice: Choice) -> Bdd<[T; N]> {
+    fn set(&mut self, arg: Bdd<[T; N]>, index: usize, from: usize, to: usize) -> Bdd<[T; N]> {
         if let Some(res) = self.unique.get(arg.as_ref()) {
             return res.clone();
         }
         let mut new = arg.as_ref().clone();
         if index == 0 {
-            // set the choice to combined of not choice
-            let combined = new
-                .zip(from_fn(choice))
-                .into_iter()
-                .filter_map(|(a, b)| if !b { Some(a) } else { None })
-                .reduce(|a, b| self.next.compute(BitOr::bitor, [a, b]))
-                .unwrap();
-            let none = self.next.full(false);
-            new = from_fn(choice).map(|c| if c { combined.clone() } else { none.clone() });
+            new[to] = replace(&mut new[from], self.next.full(false));
         } else {
-            new = new.map(|item| self.next.set(item, index - 1, choice))
+            new = new.map(|item| self.next.set(item, index - 1, from, to))
         }
         let rc = self.unique(new);
         self.unique.insert(arg.as_ref().clone(), rc.clone());
@@ -74,27 +68,33 @@ impl<S: Store<T>, T: DecisionDiagram, const N: usize> Store<Bdd<[T; N]>> for RcS
     }
 
     fn visit(&mut self, arg: Bdd<[T; N]>) {
-        if self
-            .unique
-            .insert(arg.as_ref().clone(), arg.clone())
-            .is_some()
-        {
+        if self.unique.contains_key(arg.as_ref()) {
             return;
         }
         arg.iter().for_each(|t| self.next.visit(t.clone()));
+        self.unique.insert(arg.as_ref().clone(), arg);
     }
 
     fn nodes(&self) -> usize {
         self.unique.len() + self.next.nodes()
+    }
+
+    fn count(&mut self, arg: &Bdd<[T; N]>) -> usize {
+        if let Some(val) = self.count.get(arg) {
+            return *val;
+        }
+        let val = arg.iter().map(|t| self.next.count(t)).sum();
+        *self.count.try_insert(arg.clone(), val).unwrap()
     }
 }
 
 pub trait Store<T>: Default {
     fn full(&mut self, val: bool) -> T;
     fn compute(&mut self, f: Op, args: [T; 2]) -> T;
-    fn set(&mut self, arg: T, index: usize, option: Choice) -> T;
+    fn set(&mut self, arg: T, index: usize, from: usize, to: usize) -> T;
     fn visit(&mut self, arg: T);
     fn nodes(&self) -> usize;
+    fn count(&mut self, arg: &T) -> usize;
 }
 
 pub trait DecisionDiagram: Sized + Eq + Hash + Clone + Debug {
@@ -103,13 +103,17 @@ pub trait DecisionDiagram: Sized + Eq + Hash + Clone + Debug {
     fn full(val: bool) -> Self {
         Self::S::default().full(val)
     }
-    fn set(self, index: usize, choice: Choice) -> Self {
-        Self::S::default().set(self, index, choice)
+    fn set(self, index: usize, from: usize, to: usize) -> Self {
+        Self::S::default().set(self, index, from, to)
     }
     fn nodes(&self) -> usize {
         let mut store = Self::S::default();
         store.visit(self.clone());
         store.nodes()
+    }
+    fn count(&self) -> usize {
+        let mut store = Self::S::default();
+        store.count(self)
     }
 }
 
@@ -133,7 +137,7 @@ impl Store<bool> for BoolStore {
         f(args[0], args[1])
     }
 
-    fn set(&mut self, _arg: bool, _index: usize, _choice: Choice) -> bool {
+    fn set(&mut self, _arg: bool, _index: usize, _from: usize, _to: usize) -> bool {
         unreachable!()
     }
 
@@ -141,6 +145,10 @@ impl Store<bool> for BoolStore {
 
     fn nodes(&self) -> usize {
         0
+    }
+
+    fn count(&mut self, arg: &bool) -> usize {
+        *arg as usize
     }
 }
 

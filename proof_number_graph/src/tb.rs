@@ -1,4 +1,4 @@
-use crate::bdd::{Bdd, Choice, DecisionDiagram};
+use crate::bdd::{Bdd, DecisionDiagram};
 
 type Line<T> = Bdd<[Bdd<[Bdd<[Bdd<[Bdd<[T; 3]>; 3]>; 3]>; 3]>; 3]>;
 pub type TB = Line<Line<Line<Line<Line<bool>>>>>;
@@ -6,19 +6,13 @@ pub type TB = Line<Line<Line<Line<Line<bool>>>>>;
 #[derive(Clone)]
 pub struct Action {
     pos: [usize; 2],
-    my: [Choice; 2],
+    my_other_empty: [usize; 3],
 }
 
-fn eq<const P: usize>(i: usize) -> bool {
-    i == P
-}
-fn uneq<const P: usize>(i: usize) -> bool {
-    i != P
-}
-pub const PLAYER0: [Choice; 2] = [eq::<0>, uneq::<0>];
-pub const PLAYER1: [Choice; 2] = [eq::<1>, uneq::<1>];
+pub const PLAYER0: [usize; 3] = [0, 1, 2];
+pub const PLAYER1: [usize; 3] = [1, 0, 2];
 
-pub fn all_actions(player: [Choice; 2]) -> Vec<Action> {
+pub fn all_actions(player: [usize; 3]) -> Vec<Action> {
     let mut actions = vec![];
     for a in 0..25 {
         for b in 0..25 {
@@ -29,7 +23,7 @@ pub fn all_actions(player: [Choice; 2]) -> Vec<Action> {
 
                 actions.push(Action {
                     pos: [a, b],
-                    my: player,
+                    my_other_empty: player,
                 })
             }
         }
@@ -39,8 +33,12 @@ pub fn all_actions(player: [Choice; 2]) -> Vec<Action> {
 
 impl Action {
     pub fn undo(&self, mut state: TB) -> TB {
-        state = state.set(self.pos[0], self.my[0]);
-        state.set(self.pos[1], self.my[1])
+        state = state.set(self.pos[0], self.my_other_empty[1], self.my_other_empty[0]);
+        state = state.set(self.pos[0], self.my_other_empty[2], self.my_other_empty[0]); // overwrites the prev one
+        let mut take = state.clone();
+        take = take.set(self.pos[1], self.my_other_empty[0], self.my_other_empty[1]);
+        state = state.set(self.pos[1], self.my_other_empty[0], self.my_other_empty[2]);
+        state | take
     }
 
     pub fn possible(&self) -> TB {
@@ -50,13 +48,20 @@ impl Action {
 
 impl TB {
     pub fn expand_wins(self) -> TB {
-        let mut losses = Self::full(true);
+        let neg_self = !self;
+        // from the perspective of player 0
+        let mut loss_draw = Self::full(false);
         for action in all_actions(PLAYER1) {
-            losses &= action.undo(self.clone()) | !action.possible()
+            // check if player 1 can force a loss or draw
+            loss_draw |= action.undo(neg_self.clone());
+            println!("loss_draw size: {}", loss_draw.nodes());
         }
+        let neg_loss_draw = !loss_draw;
         let mut wins = Self::full(false);
         for action in all_actions(PLAYER0) {
-            wins |= action.undo(losses.clone())
+            // check if player 0 can force a win
+            wins |= action.undo(neg_loss_draw.clone());
+            println!("wins size: {}", wins.nodes());
         }
         wins
     }

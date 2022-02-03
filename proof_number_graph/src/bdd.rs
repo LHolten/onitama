@@ -51,6 +51,9 @@ impl<S: Store<T>, T: DecisionDiagram, const N: usize> Store<Bdd<[T; N]>> for RcS
     }
 
     fn set(&mut self, arg: Bdd<[T; N]>, index: usize, choice: Choice) -> Bdd<[T; N]> {
+        if let Some(res) = self.unique.get(arg.as_ref()) {
+            return res.clone();
+        }
         let mut new = arg.as_ref().clone();
         if index == 0 {
             // set the choice to combined of not choice
@@ -65,7 +68,9 @@ impl<S: Store<T>, T: DecisionDiagram, const N: usize> Store<Bdd<[T; N]>> for RcS
         } else {
             new = new.map(|item| self.next.set(item, index - 1, choice))
         }
-        self.unique(new)
+        let rc = self.unique(new);
+        self.unique.insert(arg.as_ref().clone(), rc.clone());
+        rc
     }
 
     fn visit(&mut self, arg: Bdd<[T; N]>) {
@@ -92,7 +97,7 @@ pub trait Store<T>: Default {
     fn nodes(&self) -> usize;
 }
 
-pub trait DecisionDiagram: Sized + Eq + Hash + Clone {
+pub trait DecisionDiagram: Sized + Eq + Hash + Clone + Debug {
     type S: Store<Self>;
 
     fn full(val: bool) -> Self {

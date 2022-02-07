@@ -1,11 +1,10 @@
-use crate::bdd::{Bdd, DecisionDiagram};
+use crate::bdd::{Bdd, RcStore};
 
-type Line<T> = Bdd<[Bdd<[Bdd<[Bdd<[Bdd<[T; 3]>; 3]>; 3]>; 3]>; 3]>;
-pub type TB = Line<Line<Line<Line<Line<bool>>>>>;
+pub type TB = Bdd;
 
 #[derive(Clone)]
 pub struct Action {
-    pos: [usize; 2],
+    pos: [u32; 2],
     my_other_empty: [usize; 3],
 }
 
@@ -16,11 +15,9 @@ pub fn all_actions(player: [usize; 3]) -> Vec<Action> {
     let mut actions = vec![];
     for a in 0..25 {
         for b in 0..25 {
-            let x = (a % 5usize).abs_diff(b % 5);
-            let y = (a / 5usize).abs_diff(b / 5);
-            if x + y == 1 || x + y == 2 {
-                // flips from bit and to bit
-
+            let x = (a % 5u32).abs_diff(b % 5);
+            let y = (a / 5u32).abs_diff(b / 5);
+            if x + y == 1 {
                 actions.push(Action {
                     pos: [a, b],
                     my_other_empty: player,
@@ -32,37 +29,49 @@ pub fn all_actions(player: [usize; 3]) -> Vec<Action> {
 }
 
 impl Action {
-    pub fn undo(&self, mut state: TB) -> TB {
-        state = state.set(self.pos[0], self.my_other_empty[1], self.my_other_empty[0]);
-        state = state.set(self.pos[0], self.my_other_empty[2], self.my_other_empty[0]); // overwrites the prev one
-        let mut take = state.clone();
-        take = take.set(self.pos[1], self.my_other_empty[0], self.my_other_empty[1]);
-        state = state.set(self.pos[1], self.my_other_empty[0], self.my_other_empty[2]);
-        state | take
+    pub fn undo_take(&self, store: &mut RcStore, state: &TB) -> TB {
+        let [my, other, empty] = self.my_other_empty;
+        let state = store.set(state, self.pos[1], my, other, 3);
+        store.set(&state, self.pos[0], empty, my, 3)
     }
 
-    pub fn possible(&self) -> TB {
-        self.undo(TB::full(true))
+    pub fn undo_no_take(&self, store: &mut RcStore, state: &TB) -> TB {
+        let [my, _other, empty] = self.my_other_empty;
+        let state = store.set(state, self.pos[1], my, empty, 3);
+        store.set(&state, self.pos[0], empty, my, 3)
     }
 }
 
 impl TB {
     pub fn expand_wins(self) -> TB {
-        let neg_self = !self;
-        // from the perspective of player 0
-        let mut loss_draw = Self::full(false);
-        for action in all_actions(PLAYER1) {
-            // check if player 1 can force a loss or draw
-            loss_draw |= action.undo(neg_self.clone());
-            println!("loss_draw size: {}", loss_draw.nodes());
-        }
+        let loss_draw = {
+            let neg_wins = !self;
+            // from the perspective of player 0
+            let mut store = RcStore::default();
+            let all: Vec<_> = all_actions(PLAYER1)
+                .into_iter()
+                .flat_map(|a| {
+                    [
+                        a.undo_take(&mut store, &neg_wins),
+                        a.undo_no_take(&mut store, &neg_wins),
+                    ]
+                })
+                .collect();
+            TB::or(all)
+        };
+
         let neg_loss_draw = !loss_draw;
-        let mut wins = Self::full(false);
-        for action in all_actions(PLAYER0) {
-            // check if player 0 can force a win
-            wins |= action.undo(neg_loss_draw.clone());
-            println!("wins size: {}", wins.nodes());
-        }
-        wins
+        // from the perspective of player 0
+        let mut store = RcStore::default();
+        let all: Vec<_> = all_actions(PLAYER0)
+            .into_iter()
+            .flat_map(|a| {
+                [
+                    a.undo_take(&mut store, &neg_loss_draw),
+                    a.undo_no_take(&mut store, &neg_loss_draw),
+                ]
+            })
+            .collect();
+        TB::or(all)
     }
 }

@@ -1,257 +1,214 @@
 use std::{
-    array::from_fn,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::Debug,
     hash::Hash,
-    mem::replace,
-    ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Deref, Not},
+    ops::Not,
     ptr,
     rc::Rc,
 };
 
 pub type Op = fn(bool, bool) -> bool;
 
-pub struct RcStore<S, T> {
-    unique: HashMap<T, Bdd<T>>,
-    compute: HashMap<[Bdd<T>; 2], Bdd<T>>,
-    count: HashMap<Bdd<T>, usize>,
-    next: S,
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Bdd {
+    Bool(bool),
+    Edge(Edge),
 }
 
-impl<S: Default, T> Default for RcStore<S, T> {
-    fn default() -> Self {
-        Self {
-            unique: Default::default(),
-            compute: Default::default(),
-            count: Default::default(),
-            next: Default::default(),
-        }
-    }
-}
-
-impl<S: Store<T>, T: DecisionDiagram, const N: usize> RcStore<S, [T; N]> {
-    fn unique(&mut self, val: [T; N]) -> Bdd<[T; N]> {
-        let rc = Bdd(Rc::new(val.clone()));
-        self.unique.entry(val).or_insert(rc).clone()
-    }
-}
-
-impl<S: Store<T>, T: DecisionDiagram, const N: usize> Store<Bdd<[T; N]>> for RcStore<S, [T; N]> {
-    fn full(&mut self, val: bool) -> Bdd<[T; N]> {
-        let next = self.next.full(val);
-        self.unique(from_fn(|_| next.clone()))
-    }
-
-    fn compute(&mut self, f: Op, args: [Bdd<[T; N]>; 2]) -> Bdd<[T; N]> {
-        if let Some(res) = self.compute.get(&args) {
-            return res.clone();
-        }
-        let (a, b) = (args[0].as_ref().clone(), args[1].as_ref().clone());
-        let res = a.zip(b).map(|(a, b)| self.next.compute(f, [a, b]));
-        let rc = self.unique(res);
-        self.compute.try_insert(args, rc).unwrap().clone()
-    }
-
-    fn set(&mut self, arg: Bdd<[T; N]>, index: usize, from: usize, to: usize) -> Bdd<[T; N]> {
-        if let Some(res) = self.unique.get(arg.as_ref()) {
-            return res.clone();
-        }
-        let mut new = arg.as_ref().clone();
-        if index == 0 {
-            new[to] = replace(&mut new[from], self.next.full(false));
-        } else {
-            new = new.map(|item| self.next.set(item, index - 1, from, to))
-        }
-        let rc = self.unique(new);
-        self.unique.insert(arg.as_ref().clone(), rc.clone());
-        rc
-    }
-
-    fn visit(&mut self, arg: Bdd<[T; N]>) {
-        if self.unique.contains_key(arg.as_ref()) {
-            return;
-        }
-        arg.iter().for_each(|t| self.next.visit(t.clone()));
-        self.unique.insert(arg.as_ref().clone(), arg);
-    }
-
-    fn nodes(&self) -> usize {
-        self.unique.len() + self.next.nodes()
-    }
-
-    fn count(&mut self, arg: &Bdd<[T; N]>) -> usize {
-        if let Some(val) = self.count.get(arg) {
-            return *val;
-        }
-        let val = arg.iter().map(|t| self.next.count(t)).sum();
-        *self.count.try_insert(arg.clone(), val).unwrap()
-    }
-}
-
-pub trait Store<T>: Default {
-    fn full(&mut self, val: bool) -> T;
-    fn compute(&mut self, f: Op, args: [T; 2]) -> T;
-    fn set(&mut self, arg: T, index: usize, from: usize, to: usize) -> T;
-    fn visit(&mut self, arg: T);
-    fn nodes(&self) -> usize;
-    fn count(&mut self, arg: &T) -> usize;
-}
-
-pub trait DecisionDiagram: Sized + Eq + Hash + Clone + Debug {
-    type S: Store<Self>;
-
-    fn full(val: bool) -> Self {
-        Self::S::default().full(val)
-    }
-    fn set(self, index: usize, from: usize, to: usize) -> Self {
-        Self::S::default().set(self, index, from, to)
-    }
-    fn nodes(&self) -> usize {
-        let mut store = Self::S::default();
-        store.visit(self.clone());
-        store.nodes()
-    }
-    fn count(&self) -> usize {
-        let mut store = Self::S::default();
-        store.count(self)
-    }
-}
-
-impl<T: DecisionDiagram, const C: usize> DecisionDiagram for Bdd<[T; C]> {
-    type S = RcStore<T::S, [T; C]>;
+#[derive(Clone, Eq)]
+pub struct Edge {
+    var: u32,
+    ptr: Rc<[Bdd]>,
 }
 
 #[derive(Default)]
-pub struct BoolStore {}
-
-impl DecisionDiagram for bool {
-    type S = BoolStore;
+pub struct RcStore {
+    unique: HashSet<Rc<[Bdd]>>,
+    or: HashMap<Vec<Bdd>, Bdd>,
+    apply: HashMap<Bdd, Bdd>,
 }
 
-impl Store<bool> for BoolStore {
-    fn full(&mut self, val: bool) -> bool {
-        val
+impl RcStore {
+    fn unique(&mut self, val: Rc<[Bdd]>) -> Rc<[Bdd]> {
+        self.unique.get_or_insert(val).clone()
     }
 
-    fn compute(&mut self, f: Op, args: [bool; 2]) -> bool {
-        f(args[0], args[1])
+    fn or_cost(&mut self, slice: &[Bdd], var: u32, len: usize) -> usize {
+        let mut total = 0;
+        'val: for val in 0..len {
+            let mut all_false = true;
+            for mut zdd in slice {
+                if let Bdd::Edge(edge) = zdd {
+                    if edge.var == var {
+                        zdd = &edge.ptr[val];
+                    }
+                }
+                match zdd {
+                    Bdd::Bool(true) => continue 'val,
+                    Bdd::Bool(false) => {}
+                    Bdd::Edge(_) => all_false = false,
+                }
+            }
+            if !all_false {
+                total += 1;
+            }
+        }
+        total
     }
 
-    fn set(&mut self, _arg: bool, _index: usize, _from: usize, _to: usize) -> bool {
-        unreachable!()
+    fn or(&mut self, slice: Vec<Bdd>) -> Bdd {
+        let mut edges = vec![];
+        let mut vars = vec![];
+        // if slice contains True, then return true.
+        // if slice constains False, then remove it.
+        for zdd in &*slice {
+            match zdd {
+                Bdd::Bool(true) => return Bdd::new(true),
+                Bdd::Bool(false) => {}
+                Bdd::Edge(edge) => {
+                    vars.push((edge.var, edge.ptr.len()));
+                    edges.push(zdd.clone());
+                }
+            }
+        }
+        edges.sort_unstable();
+        edges.dedup();
+        if let Some(res) = self.or.get(&edges) {
+            return res.clone();
+        }
+
+        // find the most occuring variable
+        vars.sort_unstable();
+        vars.dedup();
+        let res = if let Some((var, vals)) = vars.into_iter().max() {
+            // change all to remove that variable
+            let ptr = (0..vals)
+                .map(|val| {
+                    self.apply = HashMap::new(); // reset because we are going to apply something else
+                    let filtered = edges.iter().map(|zdd| self.filter(zdd, var, val)).collect();
+                    self.or(filtered)
+                })
+                .collect();
+            let ptr = self.unique(ptr);
+            Bdd::Edge(Edge { var, ptr })
+        } else {
+            Bdd::new(false)
+        };
+
+        self.or.try_insert(edges, res).unwrap().clone()
     }
 
-    fn visit(&mut self, _arg: bool) {}
+    fn apply<F: FnMut(&mut Bdd)>(&mut self, old: &Bdd, f: &mut F) -> Bdd {
+        if let Some(res) = self.apply.get(old) {
+            return res.clone();
+        }
 
-    fn nodes(&self) -> usize {
-        0
+        let mut new = old.clone();
+        f(&mut new);
+        if let Bdd::Edge(edge) = &mut new {
+            let new = edge.ptr.iter().map(|zdd| self.apply(zdd, f)).collect();
+            edge.ptr = self.unique(new)
+        }
+
+        self.apply.try_insert(old.clone(), new).unwrap().clone()
     }
 
-    fn count(&mut self, arg: &bool) -> usize {
-        *arg as usize
+    pub fn filter(&mut self, old: &Bdd, var: u32, val: usize) -> Bdd {
+        self.apply(old, &mut |zdd| {
+            if let Bdd::Edge(edge) = zdd {
+                if edge.var == var {
+                    *zdd = edge.ptr[val].clone();
+                }
+            }
+        })
     }
-}
 
-#[derive(Clone)]
-pub struct Bdd<T>(Rc<T>);
-impl<T> Debug for Bdd<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("Bdd").finish()
-    }
-}
-
-impl<T> Deref for Bdd<T> {
-    type Target = Rc<T>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<T> PartialEq for Bdd<T> {
-    fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(self, other)
-    }
-}
-
-impl<T> Eq for Bdd<T> {}
-
-impl<T> Hash for Bdd<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        ptr::hash(Rc::as_ptr(self), state)
-    }
-}
-
-impl<T> BitOr for Bdd<T>
-where
-    Self: DecisionDiagram,
-{
-    type Output = Bdd<T>;
-
-    fn bitor(self, rhs: Self) -> Self::Output {
-        let mut store = <Self as DecisionDiagram>::S::default();
-        store.compute(BitOr::bitor, [self, rhs])
-    }
-}
-
-impl<T> BitAnd for Bdd<T>
-where
-    Self: DecisionDiagram,
-{
-    type Output = Bdd<T>;
-
-    fn bitand(self, rhs: Self) -> Self::Output {
-        let mut store = <Self as DecisionDiagram>::S::default();
-        store.compute(BitAnd::bitand, [self, rhs])
-    }
-}
-
-impl<T> BitXor for Bdd<T>
-where
-    Self: DecisionDiagram,
-{
-    type Output = Bdd<T>;
-
-    fn bitxor(self, rhs: Self) -> Self::Output {
-        let mut store = <Self as DecisionDiagram>::S::default();
-        store.compute(BitXor::bitxor, [self, rhs])
-    }
-}
-
-impl<T> BitAndAssign for Bdd<T>
-where
-    Self: DecisionDiagram,
-{
-    fn bitand_assign(&mut self, other: Self) {
-        *self = self.clone() & other
-    }
-}
-
-impl<T> BitOrAssign for Bdd<T>
-where
-    Self: DecisionDiagram,
-{
-    fn bitor_assign(&mut self, other: Self) {
-        *self = self.clone() | other
-    }
-}
-
-impl<T> BitXorAssign for Bdd<T>
-where
-    Self: DecisionDiagram,
-{
-    fn bitxor_assign(&mut self, other: Self) {
-        *self = self.clone() ^ other
+    pub fn set(&mut self, old: &Bdd, var: u32, from: usize, to: usize, size: usize) -> Bdd {
+        self.apply = HashMap::new();
+        Bdd::Edge(Edge {
+            var,
+            ptr: (0..size)
+                .map(|i| {
+                    if i == to {
+                        self.filter(old, var, from)
+                    } else {
+                        Bdd::new(false)
+                    }
+                })
+                .collect(),
+        })
     }
 }
 
-impl<T> Not for Bdd<T>
-where
-    Self: DecisionDiagram,
-{
-    type Output = Bdd<T>;
+impl Bdd {
+    pub fn new(val: bool) -> Self {
+        Bdd::Bool(val)
+    }
+
+    pub fn or(slice: Vec<Bdd>) -> Bdd {
+        RcStore::default().or(slice)
+    }
+
+    pub fn nodes(&self) -> usize {
+        let mut total = 0;
+        RcStore::default().apply(self, &mut |_| {
+            total += 1;
+        });
+        total
+    }
+    // pub fn count(&self) -> usize {
+    //     let mut store = RcStore::default();
+    //     store.count(self)
+    // }
+}
+
+impl Not for Bdd {
+    type Output = Bdd;
 
     fn not(self) -> Self::Output {
-        self ^ Self::full(true)
+        RcStore::default().apply(&self, &mut |zdd| {
+            if let Bdd::Bool(val) = zdd {
+                *val = !*val
+            }
+        })
+    }
+}
+
+impl Debug for Edge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Edge").field(&self.var).finish()
+    }
+}
+
+impl PartialEq for Edge {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.ptr, &other.ptr) && self.var == other.var
+    }
+}
+
+impl PartialOrd for Edge {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match self.var.partial_cmp(&other.var) {
+            Some(core::cmp::Ordering::Equal) => {}
+            ord => return ord,
+        }
+        self.ptr.as_ptr().partial_cmp(&other.ptr.as_ptr())
+    }
+}
+
+impl Ord for Edge {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.var.cmp(&other.var) {
+            core::cmp::Ordering::Equal => {}
+            ord => return ord,
+        }
+        self.ptr.as_ptr().cmp(&other.ptr.as_ptr())
+    }
+}
+
+impl Hash for Edge {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        ptr::hash(Rc::as_ptr(&self.ptr), state);
+        self.var.hash(state);
     }
 }

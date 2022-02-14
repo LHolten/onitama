@@ -1,77 +1,88 @@
-use crate::bdd::{Bdd, RcStore};
+use std::ops::{BitOr, BitXor};
 
-pub type TB = Bdd;
+use bigint::U256;
+use seq_macro::seq;
 
-#[derive(Clone)]
+use crate::sdd::Sdd;
+
+include!(concat!(env!("OUT_DIR"), concat!("/", "constants.rs")));
+
+#[derive(Clone, Copy)]
 pub struct Action {
-    pos: [u32; 2],
-    my_other_empty: [usize; 3],
+    from: (usize, fn(U256) -> U256),
+    to: (usize, fn(U256) -> U256),
 }
 
-pub const PLAYER0: [usize; 3] = [0, 1, 2];
-pub const PLAYER1: [usize; 3] = [1, 0, 2];
+seq!(N in 0..80 {
+    pub const PLAYER0: &[Action] = &[
+        #(Action {
+            from: (FROM_TO[N].0, transform_from::<0, {FROM_TO[N].1}>),
+            to: (FROM_TO[N].2, transform_to::<0, {FROM_TO[N].3}>),
+        },)*
+    ];
+});
 
-pub fn all_actions(player: [usize; 3]) -> Vec<Action> {
-    let mut actions = vec![];
-    for a in 0..25 {
-        for b in 0..25 {
-            let x = (a % 5u32).abs_diff(b % 5);
-            let y = (a / 5u32).abs_diff(b / 5);
-            if x + y == 1 {
-                actions.push(Action {
-                    pos: [a, b],
-                    my_other_empty: player,
-                })
-            }
+seq!(N in 0..80 {
+    pub const PLAYER1: &[Action] = &[
+        #(Action {
+            from: (FROM_TO[N].0, transform_from::<1, {FROM_TO[N].1}>),
+            to: (FROM_TO[N].2, transform_to::<1, {FROM_TO[N].3}>),
+        },)*
+    ];
+});
+
+//assume pos < 5 and val < 3
+fn mask(pos: usize) -> (U256, usize) {
+    let mut mask = U256::one();
+    for i in 0..5 {
+        let step = 3usize.pow(i as u32);
+        if i != pos {
+            mask = mask | mask << step | mask << (step * 2)
         }
     }
-    actions
+    (mask, 3usize.pow(pos as u32))
 }
 
-impl Action {
-    pub fn undo_take(&self, store: &mut RcStore, state: &TB) -> TB {
-        let [my, other, empty] = self.my_other_empty;
-        let state = store.set(state, self.pos[1], my, other, 3);
-        store.set(&state, self.pos[0], empty, my, 3)
-    }
-
-    pub fn undo_no_take(&self, store: &mut RcStore, state: &TB) -> TB {
-        let [my, _other, empty] = self.my_other_empty;
-        let state = store.set(state, self.pos[1], my, empty, 3);
-        store.set(&state, self.pos[0], empty, my, 3)
-    }
+fn transform_from<const PLAYER: usize, const POS: usize>(bdd: U256) -> U256 {
+    let (mask, offset) = mask(POS);
+    let bdd_mask = mask << (offset * 2); // empty space
+    (bdd & bdd_mask) >> (offset * 2) << (offset * PLAYER)
 }
 
-impl TB {
-    pub fn expand_wins(self) -> TB {
+fn transform_to<const PLAYER: usize, const POS: usize>(bdd: U256) -> U256 {
+    let (mask, offset) = mask(POS);
+    let bdd_mask = mask << (offset * PLAYER);
+    let unshifted = (bdd & bdd_mask) >> (offset * PLAYER);
+    unshifted << ((1 - PLAYER) * offset) | unshifted << (offset * 2)
+}
+
+impl Sdd {
+    pub fn undo(&mut self, action: &Action, state: usize) -> usize {
+        let state = self.transform(0, state, action.from.1, action.from.0);
+        self.transform(0, state, action.to.1, action.to.0)
+    }
+
+    pub fn expand_wins(&mut self, wins: usize) -> usize {
         let loss_draw = {
-            let neg_wins = !self;
+            let neg_wins = self.apply(0, [wins, 1], BitXor::bitxor);
             // from the perspective of player 0
-            let mut store = RcStore::default();
-            let all: Vec<_> = all_actions(PLAYER1)
-                .into_iter()
-                .flat_map(|a| {
-                    [
-                        a.undo_take(&mut store, &neg_wins),
-                        a.undo_no_take(&mut store, &neg_wins),
-                    ]
-                })
-                .collect();
-            TB::or(all)
+            let mut total = 0;
+            for action in PLAYER1 {
+                let prev = self.undo(action, neg_wins);
+                total = self.apply(0, [total, prev], BitOr::bitor);
+            }
+            dbg!(&self);
+            total
         };
 
-        let neg_loss_draw = !loss_draw;
+        let neg_loss_draw = self.apply(0, [loss_draw, 1], BitXor::bitxor);
         // from the perspective of player 0
-        let mut store = RcStore::default();
-        let all: Vec<_> = all_actions(PLAYER0)
-            .into_iter()
-            .flat_map(|a| {
-                [
-                    a.undo_take(&mut store, &neg_loss_draw),
-                    a.undo_no_take(&mut store, &neg_loss_draw),
-                ]
-            })
-            .collect();
-        TB::or(all)
+        let mut total = 0;
+        for action in PLAYER0 {
+            let prev = self.undo(action, neg_loss_draw);
+            total = self.apply(0, [total, prev], BitOr::bitor);
+        }
+        dbg!(&self);
+        total
     }
 }

@@ -5,5 +5,5 @@
 #![feature(hash_set_entry)]
 // #![feature(generic_const_exprs)]
 
-pub mod bdd;
+pub mod sdd;
 pub mod tb;

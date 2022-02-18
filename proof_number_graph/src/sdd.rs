@@ -1,187 +1,128 @@
 use std::{
-    array::from_fn,
-    collections::HashMap,
-    fmt::Debug,
-    ops::{BitAnd, BitOr},
+    collections::{hash_map, HashMap, HashSet},
+    mem::replace,
 };
 
 use bigint::U256;
+use bumpalo::Bump;
 
-const EMPTY_BITS: usize = 256 - 3 * 3 * 3 * 3 * 3;
-const BDD_ALL: U256 = U256([u64::MAX, u64::MAX, u64::MAX, u64::MAX >> EMPTY_BITS]);
-const BDD_NONE: U256 = U256([0; 4]);
+use crate::sdd_ptr::{ByRef, Entry, Never, Sdd, BDD_ALL, BDD_NONE};
 
-pub struct Sdd {
-    bdds: Vec<U256>,
-    rows: [Vec<Edge>; 5], // first index is always empty
-    compute: [HashMap<Computation, usize>; 5],
+type TB<'a> = Sdd<'a, Sdd<'a, Sdd<'a, Sdd<'a, U256>>>>;
+
+type Input<'a, I> = (ByRef<'a, I>, ByRef<'a, I>);
+
+struct Context<'a> {
+    bump: &'a Bump,
+    bdd: HashSet<&'a U256>,
+    func: fn(U256, U256) -> U256,
+    view: fn(usize, U256) -> U256,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct Edge {
-    next: usize,
-    bdd: usize,
+impl<'a> Context<'a> {
+    fn unique_bdd(&mut self, val: U256) -> ByRef<'a, U256> {
+        let ptr = self
+            .bdd
+            .get_or_insert_with(&val, |val| &*self.bump.alloc(*val));
+        ByRef(ptr)
+    }
 }
 
-type BoolFn = fn(bool, bool) -> bool;
-type U256Op = fn(U256, U256) -> U256;
+trait Decision {
+    const DEPTH: usize;
+    type Out<'a>: Never<'a> + 'a;
 
-#[derive(Debug, PartialEq, Eq, Hash)]
-struct Computation {
-    args: [usize; 2],
-    func: BoolFn,
+    fn apply<'a>(
+        comp: Vec<Input<'_, Self::Out<'_>>>,
+        context: &mut Context<'a>,
+    ) -> Vec<ByRef<'a, Self::Out<'a>>>;
 }
 
-impl Sdd {
-    fn unique_bdd(&mut self, val: U256) -> usize {
-        if let Some(res) = self.bdds.iter().position(|old| old == &val) {
-            res
-        } else {
-            self.bdds.push(val);
-            self.bdds.len() - 1
+impl Decision for U256 {
+    const DEPTH: usize = 0;
+    type Out<'a> = U256;
+
+    fn apply<'a>(
+        comp: Vec<Input<'_, Self::Out<'_>>>,
+        context: &mut Context<'a>,
+    ) -> Vec<ByRef<'a, Self::Out<'a>>> {
+        let mut res = vec![];
+        for (left, right) in comp {
+            res.push(context.unique_bdd((context.func)(*left.0, *right.0)))
         }
-    }
-
-    fn apply_bdd(&mut self, args: [usize; 2], func: U256Op) -> usize {
-        self.unique_bdd(func(self.bdds[args[0]], self.bdds[args[1]]))
-    }
-
-    fn unique_sdd(&mut self, row: usize, mut val: Vec<Edge>) -> usize {
-        // insert empty for missing bdds
-        let mut total = BDD_NONE;
-        for e in &val {
-            total = total | self.bdds[e.bdd]
-        }
-        val.push(Edge {
-            next: 0,
-            bdd: self.unique_bdd(BDD_ALL & !total),
-        });
-
-        // remove impossible and combine duplicates
-        val.retain(|e| e.bdd != 0);
-        val.sort_unstable();
-        let mut iter = val.into_iter();
-        let mut combined = vec![];
-
-        let mut e1 = iter.next().unwrap();
-        for e2 in iter {
-            if e2.next == e1.next {
-                e1.bdd = self.apply_bdd([e1.bdd, e2.bdd], BitOr::bitor);
-            } else {
-                combined.push(e1);
-                e1 = e2
-            }
-        }
-        combined.push(e1);
-
-        let mut start = 0;
-        for (i, edge) in self.rows[row].iter().enumerate() {
-            if edge == &combined[i - start] {
-                if i + 1 - start == combined.len() {
-                    return start;
-                }
-            } else {
-                start = i + 1;
-            }
-        }
-        self.rows[row].extend(combined);
-        start
-    }
-
-    pub fn apply(&mut self, row: usize, args: [usize; 2], func: BoolFn) -> usize {
-        if row == self.rows.len() {
-            return func(args[0] != 0, args[1] != 0) as usize;
-        }
-        let computation = Computation { args, func };
-        if let Some(res) = self.compute[row].get(&computation) {
-            return *res;
-        }
-
-        let mut all = vec![];
-        let edges1 = self.edges(row, args[0]);
-        let edges2 = self.edges(row, args[1]);
-        for e1 in &edges1 {
-            for e2 in &edges2 {
-                let bdd = self.apply_bdd([e1.bdd, e2.bdd], BitAnd::bitand);
-                if bdd != 0 {
-                    all.push(Edge {
-                        next: self.apply(row + 1, [e1.next, e2.next], func),
-                        bdd,
-                    })
-                }
-            }
-        }
-
-        let res = self.unique_sdd(row, all);
-        self.compute[row].try_insert(computation, res).unwrap();
         res
     }
-
-    fn edges(&mut self, row: usize, mut arg: usize) -> Vec<Edge> {
-        let mut all = vec![];
-        let mut total = BDD_NONE;
-        while total != BDD_ALL {
-            let edge = self.rows[row][arg];
-            total = total | self.bdds[edge.bdd];
-            all.push(edge);
-            arg += 1;
-        }
-        all
-    }
-
-    // first use BitAnd to get positions that can be unmoved with the given move
-    // then use this function to do the unmove, it assumes that all illegal state are already handled
-    // func should turn a bdd that requires to into one that requires from but is otherwise the same
-    // TODO implement caching
-    pub fn transform(
-        &mut self,
-        row: usize,
-        arg: usize,
-        func: fn(U256) -> U256,
-        target: usize,
-    ) -> usize {
-        let edges = self.edges(row, arg).into_iter();
-        let new = if row == target {
-            edges
-                .map(|e| Edge {
-                    next: e.next,
-                    bdd: self.unique_bdd(func(self.bdds[e.bdd])),
-                })
-                .collect() // this is not complete
-        } else {
-            edges
-                .map(|e| Edge {
-                    next: self.transform(row + 1, e.next, func, target),
-                    bdd: e.bdd,
-                })
-                .collect()
-        };
-        self.unique_sdd(row, new)
-    }
 }
 
-impl Default for Sdd {
-    fn default() -> Self {
-        Self {
-            bdds: vec![BDD_NONE, BDD_ALL],
-            rows: from_fn(|_| vec![Edge { next: 0, bdd: 1 }, Edge { next: 1, bdd: 1 }]),
-            compute: Default::default(),
-        }
-    }
-}
+impl<T: Decision> Decision for Sdd<'_, T> {
+    const DEPTH: usize = T::DEPTH + 1;
+    type Out<'a> = Sdd<'a, T::Out<'a>>;
 
-impl Debug for Sdd {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Sdd")
-            .field("bdds", &self.bdds.len())
-            .field(
-                "rows",
-                &self.rows.iter().map(|row| row.len()).collect::<Vec<_>>(),
-            )
-            .field(
-                "compute",
-                &self.compute.iter().map(|row| row.len()).collect::<Vec<_>>(),
-            )
-            .finish()
+    fn apply<'a>(
+        comp: Vec<Input<'_, Self::Out<'_>>>,
+        context: &mut Context<'a>,
+    ) -> Vec<ByRef<'a, Self::Out<'a>>> {
+        let mut required = vec![];
+        let mut conds = vec![];
+        let mut comp_index = vec![];
+        {
+            let mut res_index = HashMap::new();
+            let mut res_count = 0;
+            for (left, right) in comp {
+                if let hash_map::Entry::Vacant(e) = res_index.entry((left, right)) {
+                    e.insert(res_count);
+                    res_count += 1;
+                    for e1 in left.0 {
+                        for e2 in right.0 {
+                            // TODO apply view to e2 and add missing branch
+                            let cond = *e1.cond.0 & *e2.cond.0;
+                            if cond != BDD_NONE {
+                                conds.push(context.unique_bdd(cond));
+                                required.push((e1.next, e2.next));
+                            }
+                        }
+                    }
+                }
+                comp_index.push(res_index[&(left, right)]);
+            }
+        }
+
+        let next = T::apply(required, context);
+
+        let mut res = vec![];
+        {
+            let mut res_unique = HashSet::new();
+            let mut new = vec![];
+            let mut total = BDD_NONE;
+            for (cond, next) in conds.into_iter().zip(next) {
+                new.push(Entry { next, cond });
+                total = total | *cond.0;
+                if total == BDD_ALL {
+                    new.sort_unstable_by_key(|e| e.next);
+
+                    let mut iter = new.drain(..);
+                    let mut prev = iter.next().unwrap();
+                    let iter = iter.filter_map(|item| {
+                        if item.next == prev.next {
+                            prev.cond = context.unique_bdd(*prev.cond.0 | *item.cond.0);
+                            None
+                        } else {
+                            Some(replace(&mut prev, item))
+                        }
+                    });
+                    let mut new = iter.collect::<Vec<_>>();
+                    new.push(prev);
+
+                    let ptr = res_unique
+                        .get_or_insert_with(&*new, |sdd| &*context.bump.alloc_slice_copy(sdd));
+                    res.push(ByRef(Sdd::new(ptr)));
+
+                    new.clear();
+                    total = BDD_NONE;
+                }
+            }
+        }
+
+        comp_index.into_iter().map(|i| res[i]).collect()
     }
 }

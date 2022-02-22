@@ -80,7 +80,8 @@ impl<'a, T> Sdd<'a, T> {
     pub fn new(inner: &'a [Entry<'a, T>]) -> &'a Self {
         let mut total = BDD_NONE;
         for item in inner {
-            assert!(total != BDD_ALL);
+            assert_ne!(total, BDD_ALL);
+            assert_eq!(total & *item.cond.0, BDD_NONE);
             total = total | *item.cond.0;
         }
         assert!(total == BDD_ALL);
@@ -124,14 +125,17 @@ impl<'a, T> IntoIterator for &'a Sdd<'a, T> {
 }
 
 pub trait Never<'a>: 'a {
+    const DEPTH: usize;
     const NEVER: &'a Self;
 }
 
 impl<'a> Never<'a> for U256 {
+    const DEPTH: usize = 0;
     const NEVER: &'a Self = &BDD_NONE;
 }
 
 impl<'a, T: Never<'a>> Never<'a> for Sdd<'a, T> {
+    const DEPTH: usize = T::DEPTH + 1;
     const NEVER: &'a Self = &Sdd(Entry {
         next: ByRef(T::NEVER),
         cond: ByRef(&BDD_ALL),

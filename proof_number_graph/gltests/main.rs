@@ -7,7 +7,7 @@ use proof_number_graph::{
 // use proof_number_graph::sdd::Sdd;
 
 fn main() {
-    let mut bump = Bump::new();
+    let mut bump;
     let mut tb = ByRef(<TB<'_> as Never>::NEVER);
 
     loop {

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bigint::U256;
 use bumpalo::Bump;
 
@@ -66,17 +68,19 @@ impl<'c> ByRef<'c, TB<'c>> {
     pub fn expand_wins<'a>(self, bump: &'a Bump) -> ByRef<'a, TB<'a>> {
         let mut neg_wins = ByRef(TB::<'_>::NEVER);
         for view in PLAYER1 {
-            neg_wins = TB::apply(vec![(neg_wins, self)], &mut Context::new(bump, *view))
-                .pop()
-                .unwrap();
+            let mut comp = HashMap::new();
+            comp.insert((neg_wins, self), ByRef(TB::<'_>::NEVER));
+            TB::apply(&mut comp, &mut Context::new(bump, *view));
+            neg_wins = comp[&(neg_wins, self)];
         }
         println!("step");
 
         let mut wins = ByRef(TB::<'_>::NEVER);
         for view in PLAYER0 {
-            wins = TB::apply(vec![(wins, wins)], &mut Context::new(bump, *view))
-                .pop()
-                .unwrap();
+            let mut comp = HashMap::new();
+            comp.insert((wins, neg_wins), ByRef(TB::<'_>::NEVER));
+            TB::apply(&mut comp, &mut Context::new(bump, *view));
+            wins = comp[&(wins, neg_wins)];
         }
         println!("step");
         wins

@@ -1,7 +1,4 @@
-use std::{
-    collections::{hash_map, HashMap, HashSet},
-    mem::replace,
-};
+use std::collections::{HashMap, HashSet};
 
 use bigint::U256;
 use bumpalo::Bump;
@@ -39,110 +36,106 @@ impl<'a> Context<'a> {
     }
 }
 
-pub trait Decision {
-    type Out<'a>: Never<'a>;
+pub trait Decision<'s>: Never<'s> {
+    type Out<'a>: Decision<'a>;
 
     fn apply<'a>(
-        comp: Vec<Input<'_, Self::Out<'_>>>,
+        comp: &mut HashMap<Input<'s, Self>, ByRef<'a, Self::Out<'a>>>,
         context: &mut Context<'a>,
-    ) -> Vec<ByRef<'a, Self::Out<'a>>>;
+    );
 }
 
-impl Decision for U256 {
+impl<'s> Decision<'s> for U256 {
     type Out<'a> = U256;
 
     fn apply<'a>(
-        comp: Vec<Input<'_, Self::Out<'_>>>,
+        comp: &mut HashMap<Input<'s, Self>, ByRef<'a, Self::Out<'a>>>,
         context: &mut Context<'a>,
-    ) -> Vec<ByRef<'a, Self::Out<'a>>> {
-        let mut res = vec![];
-        for (left, right) in comp {
-            let new = (context.view.func)(Self::Out::<'_>::DEPTH, BDD_ALL ^ *right.0);
-            res.push(context.unique_bdd(*left.0 | new))
+    ) {
+        for ((left, right), res) in comp {
+            let new = (context.view.func)(Self::Out::<'a>::DEPTH, BDD_ALL ^ *right.0);
+            *res = context.unique_bdd(*left.0 | new)
         }
-        res
     }
 }
 
-impl<T: Decision> Decision for Sdd<'_, T> {
+impl<'s, T: Decision<'s>> Decision<'s> for Sdd<'s, T> {
     type Out<'a> = Sdd<'a, T::Out<'a>>;
 
     fn apply<'a>(
-        comp: Vec<Input<'_, Self::Out<'_>>>,
+        comp: &mut HashMap<Input<'s, Self>, ByRef<'a, Self::Out<'a>>>,
         context: &mut Context<'a>,
-    ) -> Vec<ByRef<'a, Self::Out<'a>>> {
-        let mut required = vec![];
-        let mut conds = vec![];
-        let mut comp_index = vec![];
-        {
-            let mut res_index = HashMap::new();
-            let mut res_count = 0;
-            for (left, right) in comp {
-                if let hash_map::Entry::Vacant(hash_entry) = res_index.entry((left, right)) {
-                    hash_entry.insert(res_count);
-                    res_count += 1;
+    ) {
+        let mut required = HashMap::new();
 
-                    let mut edges2 = vec![];
-                    for mut e in right.0.into_iter().copied() {
-                        e.cond = context
-                            .unique_bdd((context.view.func)(Self::Out::<'_>::DEPTH, *e.cond.0));
-                        edges2.push(e)
-                    }
-                    edges2.push(Entry {
-                        next: ByRef(T::Out::<'_>::NEVER),
-                        cond: context.unique_bdd((context.view.mask)(Self::Out::<'_>::DEPTH)),
-                    });
-
-                    for e1 in left.0 {
-                        for e2 in &edges2 {
-                            let cond = *e1.cond.0 & *e2.cond.0;
-                            if cond != BDD_NONE {
-                                conds.push(context.unique_bdd(cond));
-                                required.push((e1.next, e2.next));
-                            }
-                        }
-                    }
-                }
-                comp_index.push(res_index[&(left, right)]);
+        for inputs in comp.keys().copied() {
+            for (_, pair) in Self::pairs(inputs, context) {
+                required.insert(pair, ByRef(T::Out::<'a>::NEVER));
             }
         }
 
-        let next = T::apply(required, context);
+        T::apply(&mut required, context);
+
+        let mut unique = HashSet::new();
+
+        for (input, res) in comp {
+            let mut new = vec![];
+            for (cond, pair) in Self::pairs(*input, context) {
+                new.push((cond, required[&pair]));
+            }
+
+            new.sort_unstable_by_key(|e| e.1);
+            let mut iter = new.drain(..);
+            let mut prev = iter.next().unwrap(); // there is at least one item
+            let iter = iter.filter_map(|item| {
+                if item.1 == prev.1 {
+                    prev.0 = prev.0 | item.0;
+                    None
+                } else {
+                    let entry = Entry {
+                        next: prev.1,
+                        cond: context.unique_bdd(prev.0),
+                    };
+                    prev = item;
+                    Some(entry)
+                }
+            });
+            let mut new = iter.collect::<Vec<_>>();
+            new.push(Entry {
+                next: prev.1,
+                cond: context.unique_bdd(prev.0),
+            });
+
+            let ptr = *unique.get_or_insert_with(&*new, |sdd| &*context.bump.alloc_slice_copy(sdd));
+            *res = ByRef(Sdd::new(ptr));
+        }
+    }
+}
+
+impl<'s, T: Decision<'s>> Sdd<'s, T> {
+    fn pairs(
+        input: (ByRef<'s, Self>, ByRef<'s, Self>),
+        context: &Context<'_>,
+    ) -> Vec<(U256, (ByRef<'s, T>, ByRef<'s, T>))> {
+        let mut right_0 = vec![];
+        for e in input.1 .0.into_iter().copied() {
+            let cond = (context.view.func)(Sdd::<'s, T>::DEPTH, *e.cond.0);
+            right_0.push((cond, e.next))
+        }
+        let mask = (context.view.mask)(Sdd::<'s, T>::DEPTH);
+        if mask != BDD_NONE {
+            right_0.push((mask, ByRef(T::NEVER)));
+        }
 
         let mut res = vec![];
-        {
-            let mut res_unique = HashSet::new();
-            let mut new = vec![];
-            let mut total = BDD_NONE;
-            for (cond, next) in conds.into_iter().zip(next) {
-                new.push(Entry { next, cond });
-                total = total | *cond.0;
-                if total == BDD_ALL {
-                    new.sort_unstable_by_key(|e| e.next);
-
-                    let mut iter = new.drain(..);
-                    let mut prev = iter.next().unwrap(); // there is at least one item
-                    let iter = iter.filter_map(|item| {
-                        if item.next == prev.next {
-                            prev.cond = context.unique_bdd(*prev.cond.0 | *item.cond.0);
-                            None
-                        } else {
-                            Some(replace(&mut prev, item))
-                        }
-                    });
-                    let mut new = iter.collect::<Vec<_>>();
-                    new.push(prev);
-
-                    let ptr = res_unique
-                        .get_or_insert_with(&*new, |sdd| &*context.bump.alloc_slice_copy(sdd));
-                    res.push(ByRef(Sdd::new(ptr)));
-
-                    new.clear();
-                    total = BDD_NONE;
+        for e1 in input.0 .0 {
+            for e2 in &right_0 {
+                let cond = *e1.cond.0 & e2.0;
+                if cond != BDD_NONE {
+                    res.push((cond, (e1.next, e2.1)));
                 }
             }
         }
-
-        comp_index.into_iter().map(|i| res[i]).collect()
+        res
     }
 }

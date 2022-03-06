@@ -70,7 +70,7 @@ impl<'c> ByRef<'c, TB<'c>> {
         for view in PLAYER1 {
             let mut comp = HashMap::new();
             comp.insert((neg_wins, self), ByRef(TB::<'_>::NEVER));
-            TB::apply(&mut comp, &mut Context::new(bump, *view));
+            Context::new(bump, *view).apply(&mut comp);
             neg_wins = comp[&(neg_wins, self)];
         }
         println!("step");
@@ -79,7 +79,7 @@ impl<'c> ByRef<'c, TB<'c>> {
         for view in PLAYER0 {
             let mut comp = HashMap::new();
             comp.insert((wins, neg_wins), ByRef(TB::<'_>::NEVER));
-            TB::apply(&mut comp, &mut Context::new(bump, *view));
+            Context::new(bump, *view).apply(&mut comp);
             wins = comp[&(wins, neg_wins)];
         }
         println!("step");

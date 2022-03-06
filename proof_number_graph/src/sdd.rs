@@ -34,53 +34,70 @@ impl<'a> Context<'a> {
             .get_or_insert_with(&val, |val| &*self.bump.alloc(*val));
         ByRef(ptr)
     }
+
+    fn pairs<'s, T: Never<'s>>(&self, input: Input<'s, Sdd<'s, T>>) -> Vec<(U256, Input<'s, T>)> {
+        let mut right_0 = vec![];
+        for e in input.1 .0.into_iter().copied() {
+            let cond = (self.view.func)(Sdd::<'s, T>::DEPTH, *e.cond.0);
+            right_0.push((cond, e.next))
+        }
+        let mask = (self.view.mask)(Sdd::<'s, T>::DEPTH);
+        if mask != BDD_NONE {
+            right_0.push((mask, ByRef(T::NEVER)));
+        }
+
+        let mut res = vec![];
+        for e1 in input.0 .0 {
+            for (e2_cond, e2_next) in right_0.iter().copied() {
+                let cond = *e1.cond.0 & e2_cond;
+                if cond != BDD_NONE {
+                    res.push((cond, (e1.next, e2_next)));
+                }
+            }
+        }
+        res
+    }
 }
 
-pub trait Decision<'s>: Never<'s> {
-    type Out<'a>: Decision<'a>;
+pub trait Decision<'a, Out> {
+    type In<'s>: Never<'s>;
 
-    fn apply<'a>(
-        comp: &mut HashMap<Input<'s, Self>, ByRef<'a, Self::Out<'a>>>,
-        context: &mut Context<'a>,
-    );
+    fn apply<'s>(&mut self, comp: &mut HashMap<Input<'s, Self::In<'s>>, ByRef<'a, Out>>);
 }
 
-impl<'s> Decision<'s> for U256 {
-    type Out<'a> = U256;
+impl<'a> Decision<'a, U256> for Context<'a> {
+    type In<'s> = U256;
 
-    fn apply<'a>(
-        comp: &mut HashMap<Input<'s, Self>, ByRef<'a, Self::Out<'a>>>,
-        context: &mut Context<'a>,
-    ) {
+    fn apply(&mut self, comp: &mut HashMap<Input<'_, U256>, ByRef<'a, U256>>) {
         for ((left, right), res) in comp {
-            let new = (context.view.func)(Self::Out::<'a>::DEPTH, BDD_ALL ^ *right.0);
-            *res = context.unique_bdd(*left.0 | new)
+            let new = (self.view.func)(Self::In::<'_>::DEPTH, BDD_ALL ^ *right.0);
+            *res = self.unique_bdd(*left.0 | new)
         }
     }
 }
 
-impl<'s, T: Decision<'s>> Decision<'s> for Sdd<'s, T> {
-    type Out<'a> = Sdd<'a, T::Out<'a>>;
+impl<'a, T: Never<'a>> Decision<'a, Sdd<'a, T>> for Context<'a>
+where
+    Self: Decision<'a, T>,
+{
+    type In<'s> = Sdd<'s, <Self as Decision<'a, T>>::In<'s>>;
 
-    fn apply<'a>(
-        comp: &mut HashMap<Input<'s, Self>, ByRef<'a, Self::Out<'a>>>,
-        context: &mut Context<'a>,
-    ) {
+    fn apply<'s>(&mut self, comp: &mut HashMap<Input<'s, Self::In<'s>>, ByRef<'a, Sdd<'a, T>>>) {
         let mut required = HashMap::new();
 
         for inputs in comp.keys().copied() {
-            for (_, pair) in Self::pairs(inputs, context) {
-                required.insert(pair, ByRef(T::Out::<'a>::NEVER));
+            for (_, pair) in self.pairs(inputs) {
+                required.insert(pair, ByRef(T::NEVER));
             }
         }
 
-        T::apply(&mut required, context);
+        self.apply(&mut required);
 
         let mut unique = HashSet::new();
 
         for (input, res) in comp {
             let mut new = vec![];
-            for (cond, pair) in Self::pairs(*input, context) {
+            for (cond, pair) in self.pairs(*input) {
                 new.push((cond, required[&pair]));
             }
 
@@ -94,7 +111,7 @@ impl<'s, T: Decision<'s>> Decision<'s> for Sdd<'s, T> {
                 } else {
                     let entry = Entry {
                         next: prev.1,
-                        cond: context.unique_bdd(prev.0),
+                        cond: self.unique_bdd(prev.0),
                     };
                     prev = item;
                     Some(entry)
@@ -103,39 +120,11 @@ impl<'s, T: Decision<'s>> Decision<'s> for Sdd<'s, T> {
             let mut new = iter.collect::<Vec<_>>();
             new.push(Entry {
                 next: prev.1,
-                cond: context.unique_bdd(prev.0),
+                cond: self.unique_bdd(prev.0),
             });
 
-            let ptr = *unique.get_or_insert_with(&*new, |sdd| &*context.bump.alloc_slice_copy(sdd));
+            let ptr = *unique.get_or_insert_with(&*new, |sdd| &*self.bump.alloc_slice_copy(sdd));
             *res = ByRef(Sdd::new(ptr));
         }
-    }
-}
-
-impl<'s, T: Decision<'s>> Sdd<'s, T> {
-    fn pairs(
-        input: (ByRef<'s, Self>, ByRef<'s, Self>),
-        context: &Context<'_>,
-    ) -> Vec<(U256, (ByRef<'s, T>, ByRef<'s, T>))> {
-        let mut right_0 = vec![];
-        for e in input.1 .0.into_iter().copied() {
-            let cond = (context.view.func)(Sdd::<'s, T>::DEPTH, *e.cond.0);
-            right_0.push((cond, e.next))
-        }
-        let mask = (context.view.mask)(Sdd::<'s, T>::DEPTH);
-        if mask != BDD_NONE {
-            right_0.push((mask, ByRef(T::NEVER)));
-        }
-
-        let mut res = vec![];
-        for e1 in input.0 .0 {
-            for e2 in &right_0 {
-                let cond = *e1.cond.0 & e2.0;
-                if cond != BDD_NONE {
-                    res.push((cond, (e1.next, e2.1)));
-                }
-            }
-        }
-        res
     }
 }

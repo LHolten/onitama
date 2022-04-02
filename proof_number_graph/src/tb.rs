@@ -1,16 +1,15 @@
 use std::collections::HashMap;
 
-use bigint::U256;
 use bumpalo::Bump;
 
 use crate::{
     sdd::{Context, Decision, View},
-    sdd_ptr::{ByRef, Never, Sdd, BDD_ALL},
+    sdd_ptr::{ByRef, Never, Sdd, BDD, BDD_ALL},
 };
 
 use seq_macro::seq;
 
-pub type TB<'a> = Sdd<'a, Sdd<'a, Sdd<'a, Sdd<'a, U256>>>>;
+pub type TB<'a> = Sdd<'a, Sdd<'a, Sdd<'a, Sdd<'a, BDD>>>>;
 
 include!(concat!(env!("OUT_DIR"), concat!("/", "constants.rs")));
 
@@ -33,8 +32,8 @@ seq!(N in 0..80 {
 });
 
 //assume pos < 5 and val < 3
-fn pos_mask(pos: usize) -> (U256, usize) {
-    let mut mask = U256::one();
+fn pos_mask(pos: usize) -> (BDD, usize) {
+    let mut mask = BDD::one();
     for i in 0..5 {
         let step = 3usize.pow(i as u32);
         if i != pos {
@@ -44,7 +43,7 @@ fn pos_mask(pos: usize) -> (U256, usize) {
     (mask, 3usize.pow(pos as u32))
 }
 
-fn transform<const PLAYER: usize, const ACTION: usize>(depth: usize, mut bdd: U256) -> U256 {
+fn transform<const PLAYER: usize, const ACTION: usize>(depth: usize, mut bdd: BDD) -> BDD {
     let (from_depth, from_pos, to_depth, to_pos) = FROM_TO[ACTION];
     if from_depth == depth {
         let (mask, offset) = pos_mask(from_pos);
@@ -60,7 +59,7 @@ fn transform<const PLAYER: usize, const ACTION: usize>(depth: usize, mut bdd: U2
     bdd
 }
 
-fn leftover<const PLAYER: usize, const ACTION: usize>(depth: usize) -> U256 {
+fn leftover<const PLAYER: usize, const ACTION: usize>(depth: usize) -> BDD {
     BDD_ALL ^ transform::<PLAYER, ACTION>(depth, BDD_ALL)
 }
 

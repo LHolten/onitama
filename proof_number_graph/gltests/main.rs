@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use bumpalo::Bump;
 use proof_number_graph::{
+    sdd::Count,
     sdd_ptr::{ByRef, Never},
     tb::TB,
 };
@@ -15,6 +18,10 @@ fn main() {
         let tmp_tb = tb.expand_wins(&tmp_bump);
         bump = Bump::new();
         tb = tmp_tb.expand_wins(&bump);
-        println!("{}", bump.allocated_bytes())
+
+        let mut count = HashMap::new();
+        count.insert(tb, 0);
+        TB::count(&mut count);
+        println!("{}", count[&tb])
     }
 }

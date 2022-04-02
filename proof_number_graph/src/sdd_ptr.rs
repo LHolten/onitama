@@ -1,10 +1,10 @@
 use std::{hash::Hash, ptr};
 
-use bigint::U256;
+use uint::construct_uint;
 
 const EMPTY_BITS: usize = 256 - 3 * 3 * 3 * 3 * 3;
-pub const BDD_ALL: U256 = U256([u64::MAX, u64::MAX, u64::MAX, u64::MAX >> EMPTY_BITS]);
-pub const BDD_NONE: U256 = U256([0; 4]);
+pub const BDD_ALL: BDD = BDD([u64::MAX, u64::MAX, u64::MAX, u64::MAX >> EMPTY_BITS]);
+pub const BDD_NONE: BDD = BDD([0; 4]);
 
 pub struct ByRef<'a, T: ?Sized>(pub &'a T);
 
@@ -44,7 +44,7 @@ impl<'a, T> Ord for ByRef<'a, T> {
 
 pub struct Entry<'a, T> {
     pub next: ByRef<'a, T>,
-    pub cond: ByRef<'a, U256>,
+    pub cond: ByRef<'a, BDD>,
 }
 
 impl<'a, T> Clone for Entry<'a, T> {
@@ -92,7 +92,7 @@ impl<'a, T> Sdd<'a, T> {
 
 pub struct EntryIter<'a, T> {
     item: Option<&'a Entry<'a, T>>,
-    total: U256,
+    total: BDD,
 }
 
 impl<'a, T> Iterator for EntryIter<'a, T> {
@@ -129,7 +129,7 @@ pub trait Never<'a>: 'a {
     const NEVER: &'a Self;
 }
 
-impl<'a> Never<'a> for U256 {
+impl<'a> Never<'a> for BDD {
     const DEPTH: usize = 0;
     const NEVER: &'a Self = &BDD_NONE;
 }
@@ -140,4 +140,8 @@ impl<'a, T: Never<'a>> Never<'a> for Sdd<'a, T> {
         next: ByRef(T::NEVER),
         cond: ByRef(&BDD_ALL),
     });
+}
+
+construct_uint! {
+    pub struct BDD(4);
 }

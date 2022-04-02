@@ -1,21 +1,20 @@
 use std::collections::{HashMap, HashSet};
 
-use bigint::U256;
 use bumpalo::Bump;
 
-use crate::sdd_ptr::{ByRef, Entry, Never, Sdd, BDD_ALL, BDD_NONE};
+use crate::sdd_ptr::{ByRef, Entry, Never, Sdd, BDD, BDD_ALL, BDD_NONE};
 
 type Input<'a, I> = (ByRef<'a, I>, ByRef<'a, I>);
 
 #[derive(Debug, Clone, Copy)]
 pub struct View {
-    pub func: fn(usize, U256) -> U256, // will map inputs with precond to postcond
-    pub mask: fn(usize) -> U256,       // everything that does not fit in the postcond
+    pub func: fn(usize, BDD) -> BDD, // will map inputs with precond to postcond
+    pub mask: fn(usize) -> BDD,      // everything that does not fit in the postcond
 }
 
 pub struct Context<'a> {
     bump: &'a Bump,
-    bdd: HashSet<&'a U256>,
+    bdd: HashSet<&'a BDD>,
     view: View,
 }
 
@@ -28,14 +27,14 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn unique_bdd(&mut self, val: U256) -> ByRef<'a, U256> {
+    fn unique_bdd(&mut self, val: BDD) -> ByRef<'a, BDD> {
         let ptr = self
             .bdd
             .get_or_insert_with(&val, |val| &*self.bump.alloc(*val));
         ByRef(ptr)
     }
 
-    fn pairs<'s, T: Never<'s>>(&self, input: Input<'s, Sdd<'s, T>>) -> Vec<(U256, Input<'s, T>)> {
+    fn pairs<'s, T: Never<'s>>(&self, input: Input<'s, Sdd<'s, T>>) -> Vec<(BDD, Input<'s, T>)> {
         let mut right_0 = vec![];
         for e in input.1 .0.into_iter().copied() {
             let cond = (self.view.func)(Sdd::<'s, T>::DEPTH, *e.cond.0);
@@ -65,10 +64,10 @@ pub trait Decision<'a, Out> {
     fn apply<'s>(&mut self, comp: &mut HashMap<Input<'s, Self::In<'s>>, ByRef<'a, Out>>);
 }
 
-impl<'a> Decision<'a, U256> for Context<'a> {
-    type In<'s> = U256;
+impl<'a> Decision<'a, BDD> for Context<'a> {
+    type In<'s> = BDD;
 
-    fn apply(&mut self, comp: &mut HashMap<Input<'_, U256>, ByRef<'a, U256>>) {
+    fn apply(&mut self, comp: &mut HashMap<Input<'_, BDD>, ByRef<'a, BDD>>) {
         for ((left, right), res) in comp {
             let new = (self.view.func)(Self::In::<'_>::DEPTH, BDD_ALL ^ *right.0);
             *res = self.unique_bdd(*left.0 | new)
@@ -85,8 +84,8 @@ where
     fn apply<'s>(&mut self, comp: &mut HashMap<Input<'s, Self::In<'s>>, ByRef<'a, Sdd<'a, T>>>) {
         let mut required = HashMap::new();
 
-        for inputs in comp.keys().copied() {
-            for (_, pair) in self.pairs(inputs) {
+        for input in comp.keys() {
+            for (_, pair) in self.pairs(*input) {
                 required.insert(pair, ByRef(T::NEVER));
             }
         }
@@ -125,6 +124,39 @@ where
 
             let ptr = *unique.get_or_insert_with(&*new, |sdd| &*self.bump.alloc_slice_copy(sdd));
             *res = ByRef(Sdd::new(ptr));
+        }
+    }
+}
+
+pub trait Count: Sized {
+    fn count(comp: &mut HashMap<ByRef<'_, Self>, u64>);
+}
+
+impl Count for BDD {
+    fn count(comp: &mut HashMap<ByRef<'_, Self>, u64>) {
+        for (input, output) in comp {
+            *output = input.0 .0.into_iter().map(|v| v.count_ones() as u64).sum()
+        }
+    }
+}
+impl<T: Count> Count for Sdd<'_, T> {
+    fn count(comp: &mut HashMap<ByRef<'_, Self>, u64>) {
+        let mut required = HashMap::new();
+
+        for input in comp.keys() {
+            for edge in input.0 {
+                required.insert(edge.next, 0);
+            }
+        }
+
+        T::count(&mut required);
+
+        for (input, res) in comp {
+            for edge in input.0 {
+                let cond = edge.cond.0 .0.into_iter();
+                let count = cond.map(|v| v.count_zeros() as u64).sum::<u64>();
+                *res += count * required[&edge.next];
+            }
         }
     }
 }
